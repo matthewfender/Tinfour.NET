@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Tinfour.Benchmarks": {
+      "commandName": "Project",
+      "commandLineArgs": "raster"
+    }
+  }
+}
