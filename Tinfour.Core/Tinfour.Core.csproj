@@ -11,7 +11,7 @@
     <Authors>G.W. Lucas;M. Fender</Authors>
     <Description>A high-performance C# library for Constrained Delaunay Triangulation (CDT), interpolation, and rasterization. Port of the Java Tinfour library.</Description>
     <PackageTags>delaunay;triangulation;tin;interpolation;rasterization;voronoi;cdt;geometry</PackageTags>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/matthewfender/Tinfour.NET</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
