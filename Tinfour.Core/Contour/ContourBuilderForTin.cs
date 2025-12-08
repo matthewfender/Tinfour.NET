@@ -811,7 +811,7 @@ public class ContourBuilderForTin
             }
 
             // check for termination conditions
-            if (V.IsNullVertex())
+            if (V?.IsNullVertex() == true)
             {
                 if (contour.IsClosed())
                 {

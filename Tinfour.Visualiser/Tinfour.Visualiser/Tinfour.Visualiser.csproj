@@ -5,6 +5,8 @@
     <LangVersion>latest</LangVersion>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Suppress nullable warnings -->
+    <NoWarn>$(NoWarn);CS8602;CS8604</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

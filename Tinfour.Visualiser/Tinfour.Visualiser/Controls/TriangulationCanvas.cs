@@ -791,7 +791,7 @@ public class TriangulationCanvas : Control
 
             var regionPaints = new Dictionary<int, SKPaint>();
 
-            if (this._useTriangleCollector)
+            if (this._useTriangleCollector && this._triangulation != null)
             {
                 // Use TriangleCollector to render constrained regions
                 Debug.WriteLine("Using TriangleCollector for visualization");

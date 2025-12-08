@@ -4,6 +4,8 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- Suppress unused field warnings -->
+    <NoWarn>$(NoWarn);CS0414</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

@@ -67,7 +67,7 @@ public class CircumcircleTests
         var circumcircle = new Circumcircle();
 
         // Act
-        var result = circumcircle.Compute(Vertex._NullVertex, Vertex._NullVertex, Vertex._NullVertex);
+        var result = circumcircle.Compute(Vertex.Null, Vertex.Null, Vertex.Null);
 
         // Assert
         Assert.False(result);
