@@ -15,6 +15,8 @@
     <RepositoryUrl>https://github.com/matthewfender/Tinfour.NET</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- Suppress missing XML comment warnings -->
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1587;CS1570</NoWarn>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
