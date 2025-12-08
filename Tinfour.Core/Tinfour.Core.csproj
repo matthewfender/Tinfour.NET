@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     
     <!-- NuGet Package Metadata -->
-    <PackageId>Tinfour.Core</PackageId>
+    <PackageId>Tinfour.NET</PackageId>
     <Version>0.99.0-rc1</Version>
     <Authors>G.W. Lucas;M. Fender</Authors>
     <Description>A high-performance C# library for Constrained Delaunay Triangulation (CDT), interpolation, and rasterization. Port of the Java Tinfour library.</Description>
