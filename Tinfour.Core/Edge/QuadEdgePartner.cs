@@ -122,7 +122,7 @@ public class QuadEdgePartner : QuadEdge
     {
         if ((_index & ConstraintLineMemberFlag) != 0)
         {
-            var c = (_index & ConstraintUpperIndexMask) >> ConstraintIndexBitSize;
+            var c = (_index & ConstraintUpperIndexMask) >> ConstraintLowerIndexBitSize;
             if (c != 0) return c - 1;
         }
 
@@ -231,18 +231,18 @@ public class QuadEdgePartner : QuadEdge
     ///     and stores the index for that constraint.
     ///     IMPORTANT: This overrides the base implementation to provide direct constraint storage.
     /// </summary>
-    /// <param name="constraintIndex">A positive integer in the range zero to 8190, or -1 for a null constraint.</param>
+    /// <param name="constraintIndex">A positive integer in the range zero to 32766, or -1 for a null constraint.</param>
     public override void SetConstraintBorderIndex(int constraintIndex)
     {
-        if (constraintIndex < -1 || constraintIndex > ConstraintIndexValueMax)
+        if (constraintIndex < -1 || constraintIndex > ConstraintLowerIndexValueMax)
             throw new ArgumentOutOfRangeException(
                 nameof(constraintIndex),
-                $"Constraint index out of range [0..{ConstraintIndexValueMax}]");
+                $"Constraint index out of range [0..{ConstraintLowerIndexValueMax}]");
 
         if (!IsConstraintRegionBorder()) _index &= ConstraintLineMemberFlag;
 
         _index = ConstraintEdgeFlag | ConstraintRegionBorderFlag | (_index & ConstraintUpperIndexZero)
-                      | ((constraintIndex + 1) << ConstraintIndexBitSize);
+                      | (constraintIndex + 1);
     }
 
     /// <summary>
@@ -251,7 +251,7 @@ public class QuadEdgePartner : QuadEdge
     /// </summary>
     /// <param name="constraintIndex">
     ///     A positive number indicating which constraint
-    ///     a particular edge is associated with.
+    ///     a particular edge is associated with (0 to 32766).
     /// </param>
     public override void SetConstraintIndex(int constraintIndex)
     {
@@ -262,10 +262,10 @@ public class QuadEdgePartner : QuadEdge
             return;
         }
 
-        if (constraintIndex > ConstraintIndexValueMax)
+        if (constraintIndex > ConstraintLowerIndexValueMax)
             throw new ArgumentOutOfRangeException(
                 nameof(constraintIndex),
-                $"Constraint index out of range [0..{ConstraintIndexValueMax}]");
+                $"Constraint index out of range [0..{ConstraintLowerIndexValueMax}]");
         var augmented = constraintIndex + 1;
         _index = (_index & ~ConstraintLowerIndexMask) | augmented | ConstraintEdgeFlag;
     }
@@ -275,7 +275,7 @@ public class QuadEdgePartner : QuadEdge
     ///     and stores the index for that constraint.
     ///     IMPORTANT: This overrides the base implementation to provide direct constraint storage.
     /// </summary>
-    /// <param name="constraintIndex">A positive integer in range zero to 8190</param>
+    /// <param name="constraintIndex">A positive integer in range zero to 4094</param>
     public override void SetConstraintLineIndex(int constraintIndex)
     {
         if (constraintIndex < 0)
@@ -285,13 +285,13 @@ public class QuadEdgePartner : QuadEdge
             return;
         }
 
-        if (constraintIndex > ConstraintIndexValueMax)
+        if (constraintIndex > ConstraintUpperIndexValueMax)
             throw new ArgumentOutOfRangeException(
                 nameof(constraintIndex),
-                $"Constraint index out of range [0..{ConstraintIndexValueMax}]");
+                $"Constraint line index out of range [0..{ConstraintUpperIndexValueMax}]");
 
         var augmented = constraintIndex + 1;
-        var shiftedValue = augmented << ConstraintIndexBitSize;
+        var shiftedValue = augmented << ConstraintLowerIndexBitSize;
         _index = (_index & ~ConstraintUpperIndexMask) | shiftedValue | ConstraintLineMemberFlag
                       | ConstraintEdgeFlag;
     }
@@ -320,7 +320,7 @@ public class QuadEdgePartner : QuadEdge
     ///     constraint and stores the index for that constraint.
     ///     IMPORTANT: This overrides the base implementation to provide direct constraint storage.
     /// </summary>
-    /// <param name="constraintIndex">A positive integer in the range 0 to 8190, or -1 for a null value</param>
+    /// <param name="constraintIndex">A positive integer in the range 0 to 32766, or -1 for a null value</param>
     public override void SetConstraintRegionInteriorIndex(int constraintIndex)
     {
         if (constraintIndex < 0)
@@ -330,10 +330,10 @@ public class QuadEdgePartner : QuadEdge
             return;
         }
 
-        if (constraintIndex > ConstraintIndexValueMax)
+        if (constraintIndex > ConstraintLowerIndexValueMax)
             throw new ArgumentOutOfRangeException(
                 nameof(constraintIndex),
-                $"Constraint index out of range [0..{ConstraintIndexValueMax}]");
+                $"Constraint index out of range [0..{ConstraintLowerIndexValueMax}]");
 
         var augmented = constraintIndex + 1;
         _index = (_index & ~ConstraintLowerIndexMask) | augmented | ConstraintRegionInteriorFlag;
