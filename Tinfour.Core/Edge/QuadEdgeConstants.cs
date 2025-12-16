@@ -30,49 +30,31 @@ internal static class QuadEdgeConstants
 
     /// <summary>
     ///     A mask for preserving the bits allocated for edge-related flags.
-    ///     At this time, there are definitions for 5 flags (bits 27-31).
+    ///     At this time, there are definitions for 5 flags with one bit reserved
+    ///     for future use.
     /// </summary>
     public const int ConstraintFlagMask = unchecked((int)0xf8000000);
 
     /// <summary>
-    ///     The number of bits committed to the storage of the lower constraint index
-    ///     (used for region/polygon constraints). The bit allocation is asymmetric:
-    ///     15 bits for lower index (region constraints) and 12 bits for upper index
-    ///     (line constraints), allowing up to 32,766 region constraints.
+    ///     The number of bits committed to the storage of a constraint index.
+    ///     Tinfour reserves space to store the constraint index values for
+    ///     the left and right side of a border constraint. Constraint indices
+    ///     are stored in the "index" element of the QuadEdgePartner class.
+    ///     The high order 5 bits are committed to various flags. So that
+    ///     leaves 27 bits available for constraint information. Since storage is
+    ///     required for two potential indices (left and right), thirteen bits
+    ///     are available for each.
     /// </summary>
-    public const int ConstraintLowerIndexBitSize = 15;
+    public const int ConstraintIndexBitSize = 13;
 
     /// <summary>
-    ///     The number of bits committed to the storage of the upper constraint index
-    ///     (used for line constraints). With 12 bits, supports up to 4,094 line constraints.
+    ///     The maximum value of a constraint index based on the 13 bits
+    ///     allocated for its storage. This would be a value of 8191, or 2^13-1.
+    ///     But QuadEdge reserves the value -1, bit state 0, to represent a null
+    ///     specification. For valid constraint indices, the QuadEdge implementation
+    ///     stores the constraint value plus one. That makes the maximum value 2^13-2
     /// </summary>
-    public const int ConstraintUpperIndexBitSize = 12;
-
-    /// <summary>
-    ///     Legacy constant for backward compatibility. Equal to ConstraintLowerIndexBitSize.
-    /// </summary>
-    public const int ConstraintIndexBitSize = ConstraintLowerIndexBitSize;
-
-    /// <summary>
-    ///     The maximum value of a lower constraint index (region/polygon constraints)
-    ///     based on the 15 bits allocated for its storage. This would be a value of
-    ///     32767 (2^15-1), but QuadEdge reserves the value 0 (bit state 0) to represent
-    ///     a null specification. For valid constraint indices, the QuadEdge implementation
-    ///     stores the constraint value plus one. That makes the maximum value 2^15-2 = 32,766.
-    /// </summary>
-    public const int ConstraintLowerIndexValueMax = (1 << ConstraintLowerIndexBitSize) - 2;
-
-    /// <summary>
-    ///     The maximum value of an upper constraint index (line constraints)
-    ///     based on the 12 bits allocated for its storage. This is 2^12-2 = 4,094.
-    /// </summary>
-    public const int ConstraintUpperIndexValueMax = (1 << ConstraintUpperIndexBitSize) - 2;
-
-    /// <summary>
-    ///     The maximum value of a constraint index. For general use, this is the
-    ///     lower index maximum (32,766) which applies to region/polygon constraints.
-    /// </summary>
-    public const int ConstraintIndexValueMax = ConstraintLowerIndexValueMax;
+    public const int ConstraintIndexValueMax = (1 << ConstraintIndexBitSize) - 2;
 
     /// <summary>
     ///     A bit indicating that an edge is part of a non-region constraint line.
@@ -83,16 +65,16 @@ internal static class QuadEdgeConstants
 
     /// <summary>
     ///     A specification for using an AND operation to extract the lower field of
-    ///     bits that contain a constraint index (bits 0-14, 15 bits).
+    ///     bits that contain a constraint index.
     /// </summary>
-    public const int ConstraintLowerIndexMask = (1 << ConstraintLowerIndexBitSize) - 1;  // 0x7FFF
+    public const int ConstraintLowerIndexMask = ~ConstraintLowerIndexZero;
 
     /// <summary>
     ///     A specification for using an AND operation to zero out the lower field of
     ///     bits that contain a constraint index. Used in preparation for storing a
     ///     new value.
     /// </summary>
-    public const int ConstraintLowerIndexZero = ~ConstraintLowerIndexMask;
+    public const int ConstraintLowerIndexZero = unchecked((int)(0xffffffff << ConstraintIndexBitSize));
 
     /// <summary>
     ///     A bit indicating that the edge is the border of a constrained region
@@ -111,9 +93,9 @@ internal static class QuadEdgeConstants
 
     /// <summary>
     ///     A specification for using an AND operation to extract the upper field of
-    ///     bits that contain a constraint index (bits 15-26, 12 bits).
+    ///     bits that contain a constraint index.
     /// </summary>
-    public const int ConstraintUpperIndexMask = ((1 << ConstraintUpperIndexBitSize) - 1) << ConstraintLowerIndexBitSize;
+    public const int ConstraintUpperIndexMask = ConstraintLowerIndexMask << ConstraintIndexBitSize;
 
     /// <summary>
     ///     A specification for using an AND operation to zero out the upper-field of
@@ -121,6 +103,12 @@ internal static class QuadEdgeConstants
     ///     new value.
     /// </summary>
     public const int ConstraintUpperIndexZero = ~ConstraintUpperIndexMask;
+
+    /// <summary>
+    ///     Defines the bit that is not yet committed for representing edge status.
+    ///     This value is equivalent to bit 26.
+    /// </summary>
+    public const int EdgeFlagReservedBit = 1 << 26;
 
     /// <summary>
     ///     A bit indicating that an edge has been marked as synthetic.
