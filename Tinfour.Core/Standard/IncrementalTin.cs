@@ -258,12 +258,9 @@ public class IncrementalTin : IIncrementalTin
         // Note: AddConstraints should only be called once during the lifetime of a TIN.
         // Multiple calls are not currently supported and may produce undefined results.
 
-        // Maximum constraint index is limited by edge storage capacity.
-        // Region/polygon constraints: up to 32,766 (15-bit lower index)
-        // Line constraints: up to 4,094 (12-bit upper index)
-        if (_constraintList.Count + constraints.Count > QuadEdgeConstants.ConstraintIndexValueMax)
-            throw new ArgumentException(
-                $"Maximum number of constraints ({QuadEdgeConstants.ConstraintIndexValueMax}) exceeded");
+        // Maximum constraint index is limited by edge storage capacity (8190)
+        if (_constraintList.Count + constraints.Count > 8190)
+            throw new ArgumentException("Maximum number of constraints (8190) exceeded");
 
         _isConformant = false;
 

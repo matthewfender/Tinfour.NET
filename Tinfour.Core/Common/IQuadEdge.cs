@@ -90,9 +90,8 @@ using System.Numerics;
 ///     </para>
 ///     <para>
 ///         When constraint objects are added to an incremental TIN instance,
-///         Tinfour assigns each object a unique integer index. Region/polygon constraints
-///         use the lower index field (0 to 32,766), while line constraints use the upper
-///         index field (0 to 4,094). IQuadEdge instances can store these indices for internal
+///         Tinfour assigns each object a unique integer index (currently, in the range
+///         zero to 8190). IQuadEdge instances can store these indices for internal
 ///         or application use.
 ///     </para>
 ///     <para>
@@ -386,7 +385,7 @@ public interface IQuadEdge
     ///     Sets a flag identifying the edge as the border of a region-based constraint
     ///     and stores the index for that constraint.
     /// </summary>
-    /// <param name="constraintIndex">A positive integer in the range zero to 32766, or -1 for a null constraint.</param>
+    /// <param name="constraintIndex">A positive integer in the range zero to 8190, or -1 for a null constraint.</param>
     void SetConstraintBorderIndex(int constraintIndex);
 
     /// <summary>
@@ -413,7 +412,7 @@ public interface IQuadEdge
     ///     Sets a flag identifying the edge as the border of a line-based constraint
     ///     and stores the index for that constraint.
     /// </summary>
-    /// <param name="constraintIndex">A positive integer in range zero to 4094</param>
+    /// <param name="constraintIndex">A positive integer in range zero to 8190</param>
     void SetConstraintLineIndex(int constraintIndex);
 
     /// <summary>
@@ -430,7 +429,7 @@ public interface IQuadEdge
     ///     Sets a flag identifying the edge as an interior member of a region-based
     ///     constraint and stores the index for that constraint.
     /// </summary>
-    /// <param name="constraintIndex">A positive integer in the range 0 to 32766, or -1 for a null value</param>
+    /// <param name="constraintIndex">A positive integer in the range 0 to 8190, or -1 for a null value</param>
     void SetConstraintRegionInteriorIndex(int constraintIndex);
 
     /// <summary>

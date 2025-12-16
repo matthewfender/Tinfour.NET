@@ -77,39 +77,13 @@ public class ConstrainedDelaunayTriangulationTests
         var tin = new IncrementalTin();
         tin.Add(new IVertex[] { new Vertex(0, 0, 0), new Vertex(1, 0, 0), new Vertex(0, 1, 0) });
 
-        // Create more than the maximum allowed constraints (32766)
+        // Create more than the maximum allowed constraints (8190)
         var constraints = new List<IConstraint>();
-        for (var i = 0; i < 32767; i++)
+        for (var i = 0; i < 8191; i++)
             constraints.Add(new LinearConstraint(new IVertex[] { new Vertex(i, 0, 0), new Vertex(i + 1, 0, 0) }));
 
         // Act & Assert
         Assert.Throws<ArgumentException>(() => tin.AddConstraints(constraints, true));
-    }
-
-    [Fact]
-    public void AddConstraints_AtMaximumLimit_ShouldSucceed()
-    {
-        // Arrange - Test that we can add up to the new maximum (32766) constraints
-        // We'll test with a smaller number (15000) to verify the new limit works
-        // without taking too long to run.
-        // Note: We use PolygonConstraint because they use the lower index field (32766 max)
-        // whereas LinearConstraint uses the upper index field (4094 max)
-        var tin = new IncrementalTin();
-        tin.Add(new IVertex[] { new Vertex(0, 0, 0), new Vertex(1, 0, 0), new Vertex(0, 1, 0) });
-
-        var constraints = new List<IConstraint>();
-        for (var i = 0; i < 15000; i++)
-            constraints.Add(new PolygonConstraint(new IVertex[]
-            {
-                new Vertex(i, 0, 0),
-                new Vertex(i + 1, 0, 0),
-                new Vertex(i + 0.5, 1, 0)
-            }));
-
-        // Act & Assert - Should not throw (previously would have failed at 8190)
-        var exception = Record.Exception(() => tin.AddConstraints(constraints, false));
-        Assert.Null(exception);
-        Assert.Equal(15000, tin.GetConstraints().Count);
     }
 
     [Fact]
