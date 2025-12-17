@@ -536,6 +536,16 @@ public class QuadEdge : IQuadEdge
     }
 
     /// <summary>
+    ///     Clears the constraint region flags (border and interior) from this edge.
+    ///     This is used when an edge is flipped and its constraint status becomes stale.
+    ///     Delegates to the dual partner which stores constraint information.
+    /// </summary>
+    public virtual void ClearConstraintRegionFlags()
+    {
+        ((QuadEdgePartner)_dual).ClearConstraintRegionFlags();
+    }
+
+    /// <summary>
     ///     Gets a string representation of this edge primarily for diagnostic purposes.
     /// </summary>
     /// <returns>A string with IVertex coordinates and edge index.</returns>

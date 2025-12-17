@@ -477,6 +477,13 @@ public interface IQuadEdge
     void SetVertices(IVertex a, IVertex b);
 
     /// <summary>
+    ///     Clears the constraint region flags (border and interior) from this edge.
+    ///     This is used when an edge is flipped and its constraint status becomes stale.
+    ///     Preserves the ConstraintEdgeFlag (if edge is constrained) and ConstraintLineMemberFlag.
+    /// </summary>
+    void ClearConstraintRegionFlags();
+
+    /// <summary>
     ///     Provides a convenience method for rendering edges by setting the
     ///     specified coordinates with the edge's endpoints.
     /// </summary>

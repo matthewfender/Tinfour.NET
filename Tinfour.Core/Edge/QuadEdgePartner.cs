@@ -378,4 +378,16 @@ public class QuadEdgePartner : QuadEdge
         _v = a;
         _dual._v = b;
     }
+
+    /// <summary>
+    ///     Clears the constraint region flags (border and interior) from this edge.
+    ///     This is used when an edge is flipped and its constraint status becomes stale.
+    ///     Preserves the ConstraintEdgeFlag (if edge is constrained) and ConstraintLineMemberFlag.
+    /// </summary>
+    public override void ClearConstraintRegionFlags()
+    {
+        // Clear both border and interior flags, but preserve other flags and constraint indices
+        // Note: We clear the lower index bits too since they store region constraint index
+        _index &= ~(ConstraintRegionBorderFlag | ConstraintRegionInteriorFlag | ConstraintLowerIndexMask);
+    }
 }

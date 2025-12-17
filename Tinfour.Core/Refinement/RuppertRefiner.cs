@@ -68,8 +68,8 @@ public class RuppertRefiner : IDelaunayRefiner
     #region Constants
 
     private const double DefaultMinTriangleArea = 1e-3;
-    private const double NearVertexRelTol = 1e-9;
-    private const double NearEdgeRelTol = 1e-9;
+    private const double NearVertexRelTol = 1e-6;  // Relaxed from 1e-9 to prevent premature termination
+    private const double NearEdgeRelTol = 1e-6;    // Relaxed from 1e-9 to prevent premature termination
     private const double ShellBase = 2.0;
     private const double ShellEps = 1e-9;
     private const double SmallCornerDeg = 60.0;
@@ -104,6 +104,7 @@ public class RuppertRefiner : IDelaunayRefiner
 
     // Bad triangle priority queue (worst first - we negate priority for min-heap)
     private readonly PriorityQueue<BadTri, double> _badTriangles;
+    private readonly HashSet<int> _inBadTriangleQueue;  // Track by edge base index for deduplication
     private bool _badTrianglesInitialized;
 
     // Encroachment queue
@@ -216,6 +217,7 @@ public class RuppertRefiner : IDelaunayRefiner
         _cornerInfo = new Dictionary<IVertex, CornerInfo>(ReferenceEqualityComparer.Instance);
         _constrainedSegments = new HashSet<IQuadEdge>(ReferenceEqualityComparer.Instance);
         _badTriangles = new PriorityQueue<BadTri, double>();
+        _inBadTriangleQueue = new HashSet<int>();
         _encroachedSegmentQueue = new Queue<IQuadEdge>();
         _inEncroachmentQueue = new HashSet<IQuadEdge>(ReferenceEqualityComparer.Instance);
 
@@ -371,6 +373,20 @@ public class RuppertRefiner : IDelaunayRefiner
             var result = InsertOffcenterOrSplit(bad);
             if (_refineOnceCount <= 10 || _refineOnceCount % 100 == 1)
                 System.Diagnostics.Debug.WriteLine($"  InsertOffcenterOrSplit returned: {(result != null ? $"vertex at ({result.X:F2},{result.Y:F2})" : "null")}");
+
+            // If insertion failed but triangle is still bad, re-queue it with lower priority
+            // This prevents the algorithm from terminating prematurely when a vertex is too close
+            if (result == null)
+            {
+                var p = TriangleBadPriority(bad);
+                if (p > 0.0)
+                {
+                    // Re-queue with slightly reduced priority so other triangles get a chance
+                    EnqueueBadTriangle(bad.GetEdgeA(), p * 0.99);
+                    System.Diagnostics.Debug.WriteLine($"  Re-queued bad triangle with reduced priority {p * 0.99:F4}");
+                }
+            }
+
             return result;
         }
 
@@ -403,6 +419,7 @@ public class RuppertRefiner : IDelaunayRefiner
     private void InitBadTriangleQueue()
     {
         _badTriangles.Clear();
+        _inBadTriangleQueue.Clear();
 
         int totalTriangles = 0;
         int constraintMemberTriangles = 0;
@@ -432,7 +449,7 @@ public class RuppertRefiner : IDelaunayRefiner
                 badTriangles++;
                 var rep = t.GetEdgeA();
                 // Use negative priority for min-heap to get max-priority first
-                _badTriangles.Enqueue(new BadTri(rep, p), -p);
+                EnqueueBadTriangle(rep, p);
             }
             else if (p == 0.0 && !aMember && !bMember && !cMember)
             {
@@ -442,6 +459,16 @@ public class RuppertRefiner : IDelaunayRefiner
 
         System.Diagnostics.Debug.WriteLine($"InitBadTriangleQueue: total={totalTriangles}, constraintMember={constraintMemberTriangles}, bad={badTriangles}, rejectedNoMembership={rejectedNoMembership}");
         _badTrianglesInitialized = true;
+    }
+
+    /// <summary>
+    ///     Enqueues a bad triangle with deduplication.
+    /// </summary>
+    private void EnqueueBadTriangle(IQuadEdge repEdge, double priority)
+    {
+        var baseIdx = repEdge.GetBaseIndex();
+        if (_inBadTriangleQueue.Add(baseIdx))
+            _badTriangles.Enqueue(new BadTri(repEdge, priority), -priority);
     }
 
     private Dictionary<IVertex, CornerInfo> BuildCornerInfo()
@@ -777,6 +804,9 @@ public class RuppertRefiner : IDelaunayRefiner
             var bt = _badTriangles.Dequeue();
             var rep = bt.RepEdge;
 
+            // Remove from deduplication set
+            _inBadTriangleQueue.Remove(rep.GetBaseIndex());
+
             var t = new SimpleTriangle(rep);
             var p = TriangleBadPriority(t);
             if (p > 0.0)
@@ -1079,7 +1109,7 @@ public class RuppertRefiner : IDelaunayRefiner
             var t = new SimpleTriangle(e);
             var p = TriangleBadPriority(t);
             if (p > 0.0)
-                _badTriangles.Enqueue(new BadTri(e, p), -p);
+                EnqueueBadTriangle(e, p);
         }
     }
 

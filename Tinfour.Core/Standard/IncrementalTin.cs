@@ -712,6 +712,18 @@ public class IncrementalTin : IIncrementalTin
                     constraintIndexForC = idx;
                     constraintIndexForD = idx;
                 }
+                else
+                {
+                    // Fallback: use the interior index directly from the edge
+                    // This handles cases where GetRegionConstraint returns null
+                    var idx = ab.GetConstraintRegionInteriorIndex();
+                    if (idx >= 0)
+                    {
+                        constraintIndexForC = idx;
+                        constraintIndexForD = idx;
+                        Debug.WriteLine($"SplitEdge: GetRegionConstraint returned null, using edge interior index {idx}");
+                    }
+                }
             }
             else if (ab.IsConstraintRegionBorder())
             {

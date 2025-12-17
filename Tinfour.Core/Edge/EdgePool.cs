@@ -302,6 +302,16 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
         e.SetVertices(c, d);
         ed.SetVertices(d, c);
 
+        // Note: We do NOT clear constraint flags here even though the edge's role has changed.
+        // The caller (RestoreConformity) should call SweepForConstraintAssignments which will
+        // properly propagate constraint membership from neighboring edges.
+        // Clearing flags here would prevent the sweep from working correctly since the sweep
+        // only propagates FROM edges that are already marked as constraint region members.
+        //
+        // If the flipped edge should no longer be interior, the sweep will not re-mark it
+        // because its neighbors won't be interior either. If it should be interior, the sweep
+        // will mark it based on neighboring interior edges.
+
         // Rewire forward cycles for the two new triangles
         // Triangle (c, d, b): e(c->d) -> edr(d->b) -> ef(b->c)
         e.SetForward(edr);
@@ -519,18 +529,11 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
         p._dual._index = b._dual._index;
 
         // Handle region border constraints if present.
-        // When splitting a partner edge (odd index), we need to explicitly set border indices
-        // on both the new edge and its dual to ensure proper constraint propagation.
-        if ((e.GetIndex() & 1) != 0 && e.IsConstraintRegionBorder())
+        // SplitEdge is always called with base reference, so we just need to handle that case.
+        // The copy above (p._dual._index = b._dual._index) preserves the constraint flags,
+        // but we explicitly set the border index to ensure it's correct on the new edge.
+        if (e.IsConstraintRegionBorder())
         {
-            p.SetConstraintBorderIndex(e.GetConstraintBorderIndex());
-            q.SetConstraintBorderIndex(b.GetConstraintBorderIndex());
-        }
-        else if (e.IsConstraintRegionBorder())
-        {
-            // For base edges that are border edges, explicitly set the border index
-            // to ensure it's correct on the new edge. The copy above preserves flags
-            // but this ensures the border index is properly set.
             var borderIdx = e.GetConstraintBorderIndex();
             if (borderIdx >= 0)
             {
