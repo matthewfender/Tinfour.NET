@@ -1,9 +1,9 @@
 # Ruppert's Refinement Algorithm - Comprehensive Fix Plan
 
-**Document Version:** 1.1
+**Document Version:** 1.6
 **Date:** December 2025
 **Author:** Analysis by Claude Code
-**Status:** In Progress
+**Status:** Complete - All critical issues resolved
 
 ---
 
@@ -329,6 +329,7 @@ The original `MaxTriangleAttempts = 10` was too conservative. When a triangle fa
 - [x] **FIX-02**: Increase proximity tolerances to reasonable values (1e-9 → 1e-6)
 - [x] **FIX-03**: Re-queue triangles when vertex insertion fails
 - [x] **FIX-05**: Add deduplication to bad triangle queue
+- [x] **FIX-21**: Add `IsConstrained()` check before edge flip in Add() insertion loop (ROOT CAUSE of constraint leakage)
 
 ### High Priority
 - [x] **FIX-04**: ~~Update constraint flags during edge flipping~~ REVISED: Don't clear flags on flip; let SweepForConstraintAssignments handle propagation. Added `ClearConstraintRegionFlags()` method for future use.
@@ -964,10 +965,75 @@ minTriangleArea = 0.1
 | 1.2 | Dec 2025 | Added FIX-19: Fixed premature termination when RefineOnce returns null after re-queuing a triangle |
 | 1.3 | Dec 2025 | REVERTED FIX-19 (caused infinite loop); Added FIX-20: Fixed priority calculation (badness ratio instead of area), added vertex count limit (50×), added high-angle warning, added abandoned triangle tracking |
 | 1.4 | Dec 2025 | Documented failed post-refinement approaches; Added alternative techniques appendix |
+| 1.5 | Dec 2025 | RESOLVED: Root cause of rasterizer showing NaN was `InterpolateZ=false` default. Fixed visualizer and tests to set `InterpolateZ=true`. Also fixed UI property setter bug preventing visual updates. |
+| 1.6 | Dec 2025 | CRITICAL FIX: Add() insertion loop was flipping constrained edges - missing `IsConstrained()` check. This caused constraint border edges to be destroyed when vertices were inserted near them. |
 
 ---
 
-## Appendix E: Failed Post-Refinement Approaches (December 2025)
+## Appendix E: Resolution of Rasterizer NaN Issue (December 2025)
+
+### Symptoms
+After Ruppert refinement:
+- Rasterizer showed only pre-existing triangles
+- All Ruppert-modified triangles returned NaN values
+- Triangles appeared to be properly marked as constrained (tests passed)
+- Navigation tests passed (triangles were reachable)
+
+### Root Cause Analysis
+The root cause was **`RuppertOptions.InterpolateZ` defaulting to `false`**.
+
+When `InterpolateZ = false`:
+1. Ruppert creates new vertices (circumcenters, off-centers, segment midpoints) with `Z = NaN`
+2. Any triangle containing these NaN-valued vertices produces NaN interpolation results
+3. The rasterizer correctly found the triangles, but couldn't compute Z values for them
+
+### The Fix
+Two issues were fixed:
+
+#### Issue 1: InterpolateZ Default
+**File:** `RuppertOptions.cs:142`
+```csharp
+public bool InterpolateZ { get; set; } = false;  // Default was false!
+```
+
+**Fix in Visualizer:** `MainViewModel.cs:451`
+```csharp
+var options = new RuppertOptions
+{
+    MinimumAngleDegrees = this.RuppertMinAngle,
+    MaxIterations = 100_000,
+    InterpolateZ = true  // Required for rasterization
+};
+```
+
+#### Issue 2: UI Property Setter Bug
+**File:** `MainViewModel.cs:762-763`
+```csharp
+// BEFORE (broken - assigned to backing field, no PropertyChanged):
+this._interpolationResult = null;
+this._voronoiResult = null;
+
+// AFTER (fixed - uses property setter, triggers PropertyChanged):
+this.InterpolationResult = null;
+this.VoronoiResult = null;
+```
+
+### Why This Was Confusing
+The debugging was confusing because:
+1. **Constraint membership tests passed** - triangles were properly marked as interior
+2. **Navigation tests passed** - the walker could find all triangles
+3. **The issue only manifested in rasterization** - not in structural integrity checks
+
+The symptom "all pre-existing triangles render but no new Ruppert triangles render" was misleading - it wasn't that new triangles couldn't be *found*, it was that they had *NaN vertex Z values*.
+
+### Lessons Learned
+1. When debugging rendering issues, check vertex data (Z values) not just structure
+2. `InterpolateZ = true` should be the default for visualization use cases
+3. With CommunityToolkit.Mvvm `[ObservableProperty]`, always use the generated property setter (not the backing field) to trigger `PropertyChanged`
+
+---
+
+## Appendix F: Failed Post-Refinement Approaches (December 2025)
 
 The following approaches were attempted to fix constraint region marking after Ruppert refinement, but were rolled back due to various issues.
 
@@ -1186,6 +1252,94 @@ Given the rendering use case and current constraint propagation issues:
 - Run Ruppert to get angle quality
 - Apply 5-10 CVT iterations to improve uniformity
 - CVT moves vertices but doesn't add new ones, so constraint membership is preserved
+
+---
+
+## Appendix G: Critical Fix - Constrained Edge Flip in Add() (December 2025)
+
+### Symptom
+Rare constraint border edge "leakage" where the red constraint line becomes discontinuous after Ruppert refinement. The issue:
+- Was very rare and only appeared in specific configurations
+- Always occurred in the same location when it happened
+- The constraint segment was **completely lost**, not just partially marked
+
+### User Observation
+> "There are skinny triangles on either side of the missing constraint segment prior to refinement. The missing edge is the long edge of a pair of skinny triangles that share 2 vertices."
+
+This observation was the key to identifying the root cause.
+
+### Root Cause
+The `Add()` method in `IncrementalTin.cs` (Lawson's insertion algorithm) was **flipping constrained edges** without checking if they were constrained.
+
+**The Bug (C# code):**
+```csharp
+// IncrementalTin.cs line 1206 (BEFORE FIX)
+if (h >= 0)
+{
+    // Edge flip procedure - PROBLEM: Flips constrained edges!
+    n2 = (QuadEdge)n1.GetForward();
+    // ...
+}
+```
+
+**The Java Reference Implementation:**
+```java
+// IncrementalTin.java line 1358-1362
+boolean edgeViolatesDelaunay = h >= 0;
+if (edgeViolatesDelaunay && c.isConstrained()) {
+    edgeViolatesDelaunay = false;  // Don't flip constrained edges!
+}
+if (edgeViolatesDelaunay) {
+    // Edge flip procedure
+}
+```
+
+The Java code explicitly checks if the edge is constrained before flipping, but this check was missing from the C# port.
+
+### Why This Caused "Leakage" at Specific Locations
+
+1. Ruppert refinement identifies skinny triangles to refine
+2. When inserting a vertex near a constraint border edge that forms part of a skinny triangle:
+   - The insertion algorithm tests the in-circle criterion
+   - If the constraint edge violates Delaunay (the opposite vertex is inside the circumcircle), `h >= 0`
+   - Without the `IsConstrained()` check, the constrained border edge gets **flipped**
+   - Flipping destroys the constraint - the edge is repurposed with different endpoints
+3. The constraint boundary now has a gap where the flipped edge used to be
+
+### The Fix
+**File:** `IncrementalTin.cs:1201-1210`
+
+```csharp
+// If h >= 0, the Delaunay criterion is not met, so we may need to flip the edge.
+// CRITICAL: Never flip constrained edges - they must remain in place to maintain
+// the constraint geometry. This matches Java's behavior at line 1359.
+var edgeViolatesDelaunay = h >= 0 && !c.IsConstrained();
+
+if (insertionLoopCount > maxInsertionLoops - 30)
+{
+    Debug.WriteLine($"    h={h:F4}, constrained={c.IsConstrained()}, branch={(edgeViolatesDelaunay ? "FLIP" : "CHECK")}");
+}
+if (edgeViolatesDelaunay)
+{
+    // Edge flip procedure
+```
+
+### Why This Was Hard to Find
+
+1. **Rare occurrence**: Only happened when:
+   - A vertex was inserted near a constraint border edge
+   - The constraint edge formed part of a skinny triangle
+   - The in-circle test indicated flipping was needed
+
+2. **Symptom appeared far from cause**: The visual symptom (broken constraint line) appeared after Ruppert refinement, but the actual bug was in the base `Add()` method
+
+3. **Tests passed**: Most constraint tests don't insert vertices near constraint edges in configurations that trigger this
+
+### Lessons Learned
+
+1. When porting geometry algorithms, in-circle/flip operations need special attention for constraint handling
+2. User observations about the geometry ("skinny triangles on either side") are crucial debugging clues
+3. Rare edge cases often occur at the intersection of multiple conditions (skinny triangle + constraint edge + vertex insertion)
 
 ---
 

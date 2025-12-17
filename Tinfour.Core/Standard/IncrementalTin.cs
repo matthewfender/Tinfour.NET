@@ -1139,12 +1139,10 @@ public class IncrementalTin : IIncrementalTin
             if (con != null)
             {
                 vertexConstraintIndex = con.GetConstraintIndex();
-                System.Diagnostics.Debug.WriteLine($"Add: Found constraint {vertexConstraintIndex} from searchEdge {searchEdge.GetIndex()} (border={searchEdge.IsConstraintRegionBorder()}, interior={searchEdge.IsConstraintRegionInterior()})");
             }
         }
 
         // Insert within existing TIN - Implementation of Lawson's algorithm
-        var replacements = 0;
         QuadEdge? buffer = null;
         var c = (QuadEdge)searchEdge;
 
@@ -1159,27 +1157,8 @@ public class IncrementalTin : IIncrementalTin
         n2.SetForward(p.GetDual());
 
         // Keep going until we're done - this is the core of the insertion algorithm
-        int insertionLoopCount = 0;
-        const int maxInsertionLoops = 200;  // Reduced for faster debugging
         while (true)
         {
-            insertionLoopCount++;
-            var cB = c.GetB();
-
-            if (insertionLoopCount > maxInsertionLoops)
-            {
-                Debug.WriteLine($"ERROR: InsertVertex loop exceeded {maxInsertionLoops} iterations!");
-                Debug.WriteLine($"  vertex=({v.X:F2},{v.Y:F2}), anchor=({anchor.X:F2},{anchor.Y:F2})");
-                Debug.WriteLine($"  c=edge{c.GetIndex()}, c.GetB()=({cB?.X:F2},{cB?.Y:F2}), replacements={replacements}");
-                throw new InvalidOperationException($"InsertVertex infinite loop detected after {maxInsertionLoops} iterations");
-            }
-
-            // Debug the last 30 iterations before failure
-            if (insertionLoopCount > maxInsertionLoops - 30)
-            {
-                Debug.WriteLine($"  #{insertionLoopCount}: edge{c.GetIndex()} B=({cB?.X:F2},{cB?.Y:F2}), anchor=({anchor.X:F2},{anchor.Y:F2}), match={cB == anchor}");
-            }
-
             var n0 = (QuadEdge)c.GetDual();
             n1 = (QuadEdge)n0.GetForward();
 
@@ -1198,12 +1177,12 @@ public class IncrementalTin : IIncrementalTin
                 // Standard in-circle test for non-ghost triangles
                 h = _geoOp.InCircle(vA, vB, vC, v);
 
-            // If h >= 0, the Delaunay criterion is not met, so flip the edge
-            if (insertionLoopCount > maxInsertionLoops - 30)
-            {
-                Debug.WriteLine($"    h={h:F4}, branch={(h >= 0 ? "FLIP" : "CHECK")}");
-            }
-            if (h >= 0)
+            // If h >= 0, the Delaunay criterion is not met, so we may need to flip the edge.
+            // CRITICAL: Never flip constrained edges - they must remain in place to maintain
+            // the constraint geometry. This matches Java's behavior at line 1359.
+            var edgeViolatesDelaunay = h >= 0 && !c.IsConstrained();
+
+            if (edgeViolatesDelaunay)
             {
                 // Edge flip procedure
                 n2 = (QuadEdge)n1.GetForward();
@@ -1224,7 +1203,6 @@ public class IncrementalTin : IIncrementalTin
                 }
 
                 c = n1;
-                replacements++;
             }
             else
             {
