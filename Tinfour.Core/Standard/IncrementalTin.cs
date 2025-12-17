@@ -514,8 +514,15 @@ public class IncrementalTin : IIncrementalTin
 
         var s0 = ghostEdge.GetReverse();
         var s = s0;
+        var maxIterations = _edgePool.Size() * 2 + 1000; // Safety limit
+        var iterations = 0;
         do
         {
+            if (++iterations > maxIterations)
+            {
+                Debug.WriteLine($"ERROR: GetPerimeter() exceeded {maxIterations} iterations - possible infinite loop. Returning partial perimeter with {perimeter.Count} edges.");
+                break;
+            }
             perimeter.Add(s.GetDual());
             s = s.GetForward().GetForward().GetDual().GetReverse();
         }

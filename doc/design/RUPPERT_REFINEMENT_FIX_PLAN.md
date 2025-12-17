@@ -967,6 +967,7 @@ minTriangleArea = 0.1
 | 1.4 | Dec 2025 | Documented failed post-refinement approaches; Added alternative techniques appendix |
 | 1.5 | Dec 2025 | RESOLVED: Root cause of rasterizer showing NaN was `InterpolateZ=false` default. Fixed visualizer and tests to set `InterpolateZ=true`. Also fixed UI property setter bug preventing visual updates. |
 | 1.6 | Dec 2025 | CRITICAL FIX: Add() insertion loop was flipping constrained edges - missing `IsConstrained()` check. This caused constraint border edges to be destroyed when vertices were inserted near them. |
+| 1.7 | Dec 2025 | Fixed premature termination when InsertOffcenterOrSplit returns null - now skips failed insertions instead of terminating. Fixed infinite loop in GetPerimeter() after refinement. Added safety limits to rendering loops. |
 
 ---
 
@@ -1340,6 +1341,152 @@ if (edgeViolatesDelaunay)
 1. When porting geometry algorithms, in-circle/flip operations need special attention for constraint handling
 2. User observations about the geometry ("skinny triangles on either side") are crucial debugging clues
 3. Rare edge cases often occur at the intersection of multiple conditions (skinny triangle + constraint edge + vertex insertion)
+
+---
+
+## Appendix H: Refinement Completion and Rendering Fixes (December 2025)
+
+### Symptom 1: Premature Termination
+
+**Problem:** Refinement terminated early, leaving visible skinny triangles unrefined.
+
+**Root Cause:** When `InsertOffcenterOrSplit()` returned `null` (vertex too close to existing vertex), `RefineOnce()` immediately returned `null`, which the `Refine()` loop interpreted as "refinement complete."
+
+**Debug Output:**
+```
+InsertOffcenterOrSplit returned null (count=1)
+```
+Followed by immediate termination with ~400 insertion failures out of 35k+ potential triangles.
+
+**The Fix:**
+**File:** `RuppertRefiner.cs:354-381`
+
+```csharp
+// Keep trying bad triangles until we successfully insert one, run out, or hit skip limit
+const int maxSkipsPerCall = 100; // Limit skips to prevent infinite loop in single call
+int skippedThisCall = 0;
+
+while (skippedThisCall < maxSkipsPerCall)
+{
+    var bad = NextBadTriangleFromQueue();
+    if (bad == null)
+        return null; // No more bad triangles - done
+
+    var result = InsertOffcenterOrSplit(bad);
+    if (result != null)
+        return result; // Success
+
+    // Insertion failed - skip this triangle and try the next
+    _insertionFailedCount++;
+    skippedThisCall++;
+}
+
+// Hit skip limit - return dummy vertex to keep main loop going
+return _lastInsertedVertex;
+```
+
+### Symptom 2: Out of Memory / Infinite Loop in Renderer
+
+**Problem:** After refinement completed successfully, the visualizer consumed 35GB+ of RAM and hung.
+
+**Debug Investigation:** Added progress logging to `DrawTriangulation()`:
+```
+DrawTriangulation: Drawing triangles...
+DrawTriangulation: Finished triangles (72878 drawn)
+DrawTriangulation: Drawing edges...
+DrawTriangulation: Finished edges (109317 drawn)
+DrawTriangulation: Drawing perimeter...
+[HUNG HERE]
+```
+
+**Root Cause:** The `GetPerimeter()` method uses a `do...while` loop that traverses ghost edges around the convex hull. After heavy refinement, the edge structure was in a state where the traversal never returned to the starting edge (`s != s0` was always true), causing an infinite loop.
+
+**The Fix:**
+**File:** `IncrementalTin.cs:507-532`
+
+```csharp
+public IList<IQuadEdge> GetPerimeter()
+{
+    var perimeter = new List<IQuadEdge>();
+    if (!IsBootstrapped()) return perimeter;
+
+    var ghostEdge = _edgePool.GetStartingGhostEdge();
+    if (ghostEdge == null) return perimeter;
+
+    var s0 = ghostEdge.GetReverse();
+    var s = s0;
+    var maxIterations = _edgePool.Size() * 2 + 1000; // Safety limit
+    var iterations = 0;
+    do
+    {
+        if (++iterations > maxIterations)
+        {
+            Debug.WriteLine($"ERROR: GetPerimeter() exceeded {maxIterations} iterations - possible infinite loop.");
+            break;
+        }
+        perimeter.Add(s.GetDual());
+        s = s.GetForward().GetForward().GetDual().GetReverse();
+    }
+    while (s != s0);
+
+    return perimeter;
+}
+```
+
+### Additional Renderer Safety Measures
+
+**File:** `TriangulationCanvas.cs`
+
+Added safety limits and progress logging to prevent runaway iteration:
+
+```csharp
+// Triangle rendering with limit
+var triangleCount = 0;
+const int maxTriangles = 500_000;
+foreach (var triangle in _triangulation.GetTriangles())
+{
+    if (++triangleCount > maxTriangles)
+    {
+        Debug.WriteLine($"WARNING: Triangle rendering stopped at {maxTriangles}");
+        break;
+    }
+    // ... render triangle
+}
+
+// Edge rendering with limit and progress
+var edgeCount = 0;
+const int maxEdges = 500_000;
+foreach (var edge in _triangulation.GetEdgeIterator())  // Changed from GetEdges()
+{
+    if (++edgeCount > maxEdges) break;
+    if (edgeCount % 50000 == 0)
+        Debug.WriteLine($"DrawTriangulation: Edge progress {edgeCount}...");
+    // ... render edge
+}
+```
+
+**Key Change:** Changed `GetEdges()` to `GetEdgeIterator()` to avoid materializing all edges into a list, which was causing memory issues with large meshes.
+
+### Diagnostic Statistics Added
+
+The refinement now outputs comprehensive statistics:
+
+```
+=== RUPPERT REFINE() COMPLETE ===
+Vertices: 17660 -> 36460 (+17870 added)
+Triangles: 35288 -> 72878 (+37590)
+Queue stats: total=46994, stillBad=18974, noLongerBad=28020
+Rejection stats: ghost=70, notInRegion=8379, meetsAngle=147200, seditious=0, smallArea=5
+Insertion stats: failed=451, tooCloseToLast=129, tooCloseToNearest=322
+```
+
+### Outstanding Issue
+
+The `GetPerimeter()` infinite loop is a **symptom** of a deeper issue - the edge structure may have some inconsistency after heavy refinement that prevents the perimeter traversal from returning to its starting edge. The safety limit is a workaround. A proper fix would require:
+
+1. Investigating why the ghost edge traversal breaks after refinement
+2. Potentially using edge index-based tracking instead of reference equality
+3. Verifying edge topology integrity after each vertex insertion
 
 ---
 

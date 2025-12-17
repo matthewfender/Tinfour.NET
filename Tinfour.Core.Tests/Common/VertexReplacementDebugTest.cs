@@ -153,8 +153,8 @@ public class VertexReplacementDebugTest
 
         foreach (var constraintVertex in constraintVertices)
         {
-            this._output.WriteLine(
-                $"\nTesting vertex {constraintVertex.GetIndex()} at ({constraintVertex.X:F0},{constraintVertex.Y:F0}):");
+            //this._output.WriteLine(
+            //    $"\nTesting vertex {constraintVertex.GetIndex()} at ({constraintVertex.X:F0},{constraintVertex.Y:F0}):");
 
             // Find matching vertex using the same logic as FindMatchingVertexInTin
             var startEdge = tin.GetEdges().FirstOrDefault((IQuadEdge e) => !e.GetB().IsNullVertex());

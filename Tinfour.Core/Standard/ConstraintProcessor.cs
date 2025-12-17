@@ -147,17 +147,10 @@ public class ConstraintProcessor
             Log($"Segment {iSegment}: v0=({v0.X},{v0.Y}) -> v1=({v1.X},{v1.Y})");
             Log($"  e0 before segment: {e0.GetIndex()}, e0.GetA()=({e0.GetA().X},{e0.GetA().Y})");
 
-            Debug.WriteLine(
-                $"ProcessConstraint: Processing segment {iSegment}/{nSegments - 1}: ({v0.X:F2},{v0.Y:F2}) -> ({v1.X:F2},{v1.Y:F2})");
-            Debug.WriteLine($"ProcessConstraint: v0 index={v0.GetIndex()}, v1 index={v1.GetIndex()}");
-
             // Pinwheel at v0 to see if edge (v0,v1) already exists
             var e = e0;
             var priorNull = false;
             QuadEdge? reEntry = null;
-
-            Debug.WriteLine(
-                $"ProcessConstraint: Starting pinwheel search from edge {e0.GetIndex()} ({e0.GetA().GetIndex()}-{e0.GetB().GetIndex()})");
             var pinwheelStep = 0;
 
             do
@@ -165,27 +158,27 @@ public class ConstraintProcessor
                 var b = e.GetB();
                 var bCoords = b.IsNullVertex() ? "NULL" : $"({b.X},{b.Y})";
                 Log($"  Pinwheel step {pinwheelStep}: edge {e.GetIndex()}, B={bCoords}");
-                Debug.WriteLine(
-                    $"ProcessConstraint: Pinwheel step {pinwheelStep}: edge {e.GetIndex()} -> vertex {(b.IsNullVertex() ? "NULL" : b.GetIndex().ToString())}({(b.IsNullVertex() ? "ghost" : $"{b.X:F1},{b.Y:F1}")})");
+                //Debug.WriteLine(
+                //    $"ProcessConstraint: Pinwheel step {pinwheelStep}: edge {e.GetIndex()} -> vertex {(b.IsNullVertex() ? "NULL" : b.GetIndex().ToString())}({(b.IsNullVertex() ? "ghost" : $"{b.X:F1},{b.Y:F1}")})");
 
                 if (b.IsNullVertex())
                 {
                     priorNull = true;
-                    Debug.WriteLine("ProcessConstraint: Found null vertex (ghost edge)");
+                //    Debug.WriteLine("ProcessConstraint: Found null vertex (ghost edge)");
                 }
                 else
                 {
                     // Check if this edge connects v0 to v1 using Java algorithm
                     var directMatch = b.Equals(v1); // ReferenceEquals(b, v1);
                     Log($"    Testing B=({b.X},{b.Y}) vs v1=({v1.X},{v1.Y}): Equals={directMatch}");
-                    Debug.WriteLine(
-                        $"ProcessConstraint: Testing vertex {b.GetIndex()} against target {v1.GetIndex()}: Equals = {directMatch}");
+                    //Debug.WriteLine(
+                    //    $"ProcessConstraint: Testing vertex {b.GetIndex()} against target {v1.GetIndex()}: Equals = {directMatch}");
 
                     if (directMatch)
                     {
                         Log($"    MATCH FOUND! Marking edge {e.GetIndex()} as constrained");
-                        Debug.WriteLine(
-                            $"ProcessConstraint: Found existing edge for segment {iSegment} (direct match) - marking edge {e.GetIndex()} as constrained");
+                        //Debug.WriteLine(
+                        //    $"ProcessConstraint: Found existing edge for segment {iSegment} (direct match) - marking edge {e.GetIndex()} as constrained");
                         SetConstrained(e, constraint, edgesForConstraint);
                         e0 = (QuadEdge)e.GetDual();
                         successfulSegments++;
@@ -195,8 +188,8 @@ public class ConstraintProcessor
                     if (b is VertexMergerGroup bGroup && bGroup.Contains(v1.AsVertex()))
                     {
                         Log($"    MERGER GROUP MATCH! Marking edge {e.GetIndex()} as constrained");
-                        Debug.WriteLine(
-                            $"ProcessConstraint: Found existing edge for segment {iSegment} (merger group match)");
+                        //Debug.WriteLine(
+                        //    $"ProcessConstraint: Found existing edge for segment {iSegment} (merger group match)");
                         cvList[iSegment + 1] = b;
                         SetConstrained(e, constraint, edgesForConstraint);
                         e0 = (QuadEdge)e.GetDual();
@@ -403,8 +396,8 @@ public class ConstraintProcessor
             SetConstrained(nc, constraint, edgesForConstraint);
             var dc = (QuadEdge)nc.GetDual();
 
-            Debug.WriteLine(
-                $"ProcessConstraint: Created constraint edge {nc.GetIndex()} ({v0.X:F2},{v0.Y:F2})->({c.X:F2},{c.Y:F2})");
+            //Debug.WriteLine(
+            //    $"ProcessConstraint: Created constraint edge {nc.GetIndex()} ({v0.X:F2},{v0.Y:F2})->({c.X:F2},{c.Y:F2})");
 
             if (left1 != null && left0 != null && right0 != null && right1 != null)
             {
@@ -413,12 +406,12 @@ public class ConstraintProcessor
                 dc.SetForward(right0);
                 dc.SetReverse(right1);
 
-                Debug.WriteLine(
-                    $"ProcessConstraint: Wired topology - nc:{nc.GetIndex()} f:{left1.GetIndex()} r:{left0.GetIndex()}, dc:{dc.GetIndex()} f:{right0.GetIndex()} r:{right1.GetIndex()}");
+            //    Debug.WriteLine(
+            //        $"ProcessConstraint: Wired topology - nc:{nc.GetIndex()} f:{left1.GetIndex()} r:{left0.GetIndex()}, dc:{dc.GetIndex()} f:{right0.GetIndex()} r:{right1.GetIndex()}");
             }
             else
             {
-                Debug.WriteLine("ProcessConstraint: WARNING - null topology references during constraint edge wiring");
+ //               Debug.WriteLine("ProcessConstraint: WARNING - null topology references during constraint edge wiring");
             }
 
             e0 = dc; // next segment will start here
@@ -612,7 +605,7 @@ public class ConstraintProcessor
             deque.Dequeue();
         }
 
-        Debug.WriteLine($"FloodFillConstrainedRegionsQueue: Maximum queue size was {maxQueueSize}");
+  //      Debug.WriteLine($"FloodFillConstrainedRegionsQueue: Maximum queue size was {maxQueueSize}");
     }
 
     /// <summary>

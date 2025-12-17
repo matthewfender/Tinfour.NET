@@ -68,8 +68,8 @@ public class RuppertRefiner : IDelaunayRefiner
     #region Constants
 
     private const double DefaultMinTriangleArea = 1e-3;
-    private const double NearVertexRelTol = 1e-6;  // Relaxed from 1e-9 to prevent premature termination
-    private const double NearEdgeRelTol = 1e-6;    // Relaxed from 1e-9 to prevent premature termination
+    private const double NearVertexRelTol = 1e-9;  // Match Java - 1e-6 was too conservative and rejected too many insertions
+    private const double NearEdgeRelTol = 1e-9;    // Match Java - 1e-6 was too conservative and rejected too many insertions
     private const double ShellBase = 2.0;
     private const double ShellEps = 1e-9;
     private const double SmallCornerDeg = 60.0;
@@ -207,7 +207,30 @@ public class RuppertRefiner : IDelaunayRefiner
         _rhoTarget = 1.0 / (2.0 * sinT);
         _rhoMin = options.EnforceSqrt2Guard ? Math.Max(Sqrt2, _rhoTarget) : _rhoTarget;
 
-        _minTriangleArea = options.MinimumTriangleArea;
+        // Auto-compute minimum triangle area based on TIN bounds if using default value.
+        // This ensures the threshold scales appropriately for any coordinate system
+        // (e.g., geographic data in degrees vs. projected data in meters).
+        const double defaultMinArea = 1e-3;
+        var minArea = options.MinimumTriangleArea;
+        if (Math.Abs(minArea - defaultMinArea) < 1e-10)
+        {
+            // User is using default - compute a sensible value based on data bounds
+            var bounds = tin.GetBounds();
+            if (bounds.HasValue)
+            {
+                var (_, _, width, height) = bounds.Value;
+                var boundsSize = Math.Max(width, height);
+                // Target: triangles with edge length ~= boundsSize / 100000 should still be refineable
+                // This allows very fine refinement for geographic data in degrees
+                // Minimum edge length = boundsSize / 100000
+                // Minimum area (equilateral) ~= (edge^2 * sqrt(3)) / 4 ~= edge^2 / 2
+                var minEdge = boundsSize / 100000.0;
+                var computedMinArea = minEdge * minEdge / 2.0;
+                minArea = computedMinArea;
+                System.Diagnostics.Debug.WriteLine($"RuppertRefiner: Auto-computed MinimumTriangleArea = {minArea:E3} (bounds size = {boundsSize:E3})");
+            }
+        }
+        _minTriangleArea = minArea;
         _maxIterations = options.MaxIterations;
         _skipSeditiousTriangles = options.SkipSeditiousTriangles;
         _ignoreSeditiousEncroachments = options.IgnoreSeditiousEncroachments;
@@ -263,9 +286,12 @@ public class RuppertRefiner : IDelaunayRefiner
     /// <inheritdoc />
     public bool Refine()
     {
+        _initialVertexCount = _tin.GetVertices().Count;
+        _initialTriangleCount = _tin.CountTriangles().ValidTriangles;
+
         System.Diagnostics.Debug.WriteLine("=== RUPPERT REFINE() STARTING ===");
-        System.Diagnostics.Debug.WriteLine($"  TIN vertices: {_tin.GetVertices().Count}");
-        System.Diagnostics.Debug.WriteLine($"  TIN edges: {_tin.GetEdges().Count}");
+        System.Diagnostics.Debug.WriteLine($"  TIN vertices: {_initialVertexCount}");
+        System.Diagnostics.Debug.WriteLine($"  TIN triangles: {_initialTriangleCount}");
         System.Diagnostics.Debug.WriteLine($"  Min angle threshold: {_minAngleRad} radians ({_minAngleRad * 180.0 / Math.PI:F1} degrees)");
         System.Diagnostics.Debug.WriteLine($"  Constrained segments initialized: {_constrainedSegmentsInitialized}");
         System.Diagnostics.Debug.WriteLine($"  Bad triangles initialized: {_badTrianglesInitialized}");
@@ -296,102 +322,66 @@ public class RuppertRefiner : IDelaunayRefiner
         var iterations = 0;
         var maxIter = _maxIterations > 0 ? _maxIterations : _vdata.Count * 200;
 
-        // Debug: track what we're doing
-        var lastBadTriCount = _badTriangles.Count;
-        var stuckCount = 0;
-
         while (iterations++ < maxIter)
         {
-            // Debug every iteration for first 50
-            if (iterations <= 50)
-                System.Diagnostics.Debug.WriteLine($"--- Iteration {iterations} starting ---");
-
             var v = RefineOnce();
-
-            if (iterations <= 50)
-                System.Diagnostics.Debug.WriteLine($"--- Iteration {iterations} done, v={(v != null ? $"({v.X:F2},{v.Y:F2})" : "null")} ---");
 
             if (v == null)
                 return true;
 
-            // Debug: detect if we're stuck
-            if (iterations % 100 == 0)
+            // Debug: periodic progress logging
+            if (iterations % 1000 == 0)
             {
-                System.Diagnostics.Debug.WriteLine($"Ruppert iteration {iterations}: bad queue={_badTriangles.Count}, encroached queue={_encroachedSegmentQueue.Count}, vertices={_tin.GetVertices().Count}");
-            }
-
-            // Detect if queue size isn't decreasing
-            if (_badTriangles.Count >= lastBadTriCount)
-            {
-                stuckCount++;
-                if (stuckCount > 100 && stuckCount % 100 == 0)
-                {
-                    System.Diagnostics.Debug.WriteLine($"WARNING: Potentially stuck at iteration {iterations}, queue not decreasing. Count={_badTriangles.Count}");
-                }
-            }
-            else
-            {
-                stuckCount = 0;
-                lastBadTriCount = _badTriangles.Count;
+                System.Diagnostics.Debug.WriteLine($"Ruppert iteration {iterations}: bad queue={_badTriangles.Count}, vertices={_tin.GetVertices().Count}");
             }
         }
 
         return false;
     }
 
-    private static int _refineOnceCount = 0;
-
     /// <inheritdoc />
     public IVertex? RefineOnce()
     {
-        _refineOnceCount++;
-
         if (!_constrainedSegmentsInitialized)
             InitConstrainedSegments();
 
         // First priority: split encroached segments
         var enc = FindEncroachedSegment();
         if (enc != null)
-        {
-            if (_refineOnceCount <= 10 || _refineOnceCount % 100 == 1)
-                System.Diagnostics.Debug.WriteLine($"RefineOnce #{_refineOnceCount}: Splitting encroached segment");
-            var result = SplitSegmentSmart(enc);
-            if (_refineOnceCount <= 10 || _refineOnceCount % 100 == 1)
-                System.Diagnostics.Debug.WriteLine($"  SplitSegmentSmart returned: {(result != null ? $"vertex at ({result.X:F2},{result.Y:F2})" : "null")}");
-            return result;
-        }
+            return SplitSegmentSmart(enc);
 
         // Second priority: fix bad triangles
         if (!_badTrianglesInitialized)
             InitBadTriangleQueue();
 
-        var bad = NextBadTriangleFromQueue();
-        if (bad != null)
+        // Keep trying bad triangles until we successfully insert one, run out, or hit skip limit
+        const int maxSkipsPerCall = 100; // Limit skips to prevent infinite loop in single call
+        int skippedThisCall = 0;
+
+        while (skippedThisCall < maxSkipsPerCall)
         {
-            if (_refineOnceCount <= 10 || _refineOnceCount % 100 == 1)
-                System.Diagnostics.Debug.WriteLine($"RefineOnce #{_refineOnceCount}: Inserting offcenter for bad triangle");
+            var bad = NextBadTriangleFromQueue();
+            if (bad == null)
+                return null; // No more bad triangles - done
+
+            // Try to insert offcenter or split
             var result = InsertOffcenterOrSplit(bad);
-            if (_refineOnceCount <= 10 || _refineOnceCount % 100 == 1)
-                System.Diagnostics.Debug.WriteLine($"  InsertOffcenterOrSplit returned: {(result != null ? $"vertex at ({result.X:F2},{result.Y:F2})" : "null")}");
+            if (result != null)
+                return result; // Success
 
-            // If insertion failed but triangle is still bad, re-queue it with lower priority
-            // This prevents the algorithm from terminating prematurely when a vertex is too close
-            if (result == null)
+            // Insertion failed - skip this triangle and try the next
+            _insertionFailedCount++;
+            skippedThisCall++;
+            if (_insertionFailedCount <= 10 || _insertionFailedCount % 1000 == 0)
             {
-                var p = TriangleBadPriority(bad);
-                if (p > 0.0)
-                {
-                    // Re-queue with slightly reduced priority so other triangles get a chance
-                    EnqueueBadTriangle(bad.GetEdgeA(), p * 0.99);
-                    System.Diagnostics.Debug.WriteLine($"  Re-queued bad triangle with reduced priority {p * 0.99:F4}");
-                }
+                System.Diagnostics.Debug.WriteLine($"InsertOffcenterOrSplit returned null (total={_insertionFailedCount}, thisCall={skippedThisCall}) - triangle skipped");
             }
-
-            return result;
         }
 
-        System.Diagnostics.Debug.WriteLine($"RefineOnce #{_refineOnceCount}: Nothing to do, returning null");
-        return null;
+        // Hit skip limit - return a dummy vertex to keep the main loop going
+        // This prevents premature termination but avoids infinite loops
+        System.Diagnostics.Debug.WriteLine($"WARNING: Hit max skips ({maxSkipsPerCall}) in single RefineOnce call, continuing...");
+        return _lastInsertedVertex; // Return last vertex to signal "keep going"
     }
 
     #endregion
@@ -523,12 +513,13 @@ public class RuppertRefiner : IDelaunayRefiner
 
     #region Triangle Quality Assessment
 
-    private static int _debugTriangleCheckCount = 0;
-
     private double TriangleBadPriority(SimpleTriangle t)
     {
         if (t.IsGhost())
+        {
+            _rejectedGhost++;
             return 0.0;
+        }
 
         var constraints = _tin.GetConstraints();
 
@@ -538,21 +529,10 @@ public class RuppertRefiner : IDelaunayRefiner
             var eA = t.GetEdgeA();
             var eB = t.GetEdgeB();
             var eC = t.GetEdgeC();
-            var aIsMember = eA.IsConstraintRegionMember();
-            var bIsMember = eB.IsConstraintRegionMember();
-            var cIsMember = eC.IsConstraintRegionMember();
 
-            if (!aIsMember || !bIsMember || !cIsMember)
+            if (!eA.IsConstraintRegionMember() || !eB.IsConstraintRegionMember() || !eC.IsConstraintRegionMember())
             {
-                // Debug: log every 1000th rejection to see what's happening
-                _debugTriangleCheckCount++;
-                if (_debugTriangleCheckCount % 1000 == 1)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Triangle rejected: edges A={aIsMember}, B={bIsMember}, C={cIsMember}");
-                    System.Diagnostics.Debug.WriteLine($"  EdgeA: constrained={eA.IsConstrained()}, border={eA.IsConstraintRegionBorder()}, interior={eA.IsConstraintRegionInterior()}");
-                    System.Diagnostics.Debug.WriteLine($"  EdgeB: constrained={eB.IsConstrained()}, border={eB.IsConstraintRegionBorder()}, interior={eB.IsConstraintRegionInterior()}");
-                    System.Diagnostics.Debug.WriteLine($"  EdgeC: constrained={eC.IsConstrained()}, border={eC.IsConstraintRegionBorder()}, interior={eC.IsConstraintRegionInterior()}");
-                }
+                _rejectedNotInRegion++;
                 return 0.0;
             }
         }
@@ -608,20 +588,23 @@ public class RuppertRefiner : IDelaunayRefiner
 
         // Bad if (R/s) >= rhoMin <=> pairProd >= 4*rhoMin^2 * cross^2
         if (pairProd < threshMul * cross2)
+        {
+            // Triangle meets angle criterion - not bad
+            _rejectedMeetsAngle++;
             return 0.0;
+        }
 
         if (_skipSeditiousTriangles && IsSeditious(sA, sB))
+        {
+            _rejectedSeditious++;
             return 0.0;
+        }
 
         // Area must exceed threshold
         if (cross2 <= minCross2)
-            return 0.0;
-
-        // Debug: log bad triangles occasionally
-        _debugTriangleCheckCount++;
-        if (_debugTriangleCheckCount % 500 == 1)
         {
-            System.Diagnostics.Debug.WriteLine($"Bad triangle found: vertices=({a.X:F2},{a.Y:F2}), ({b.X:F2},{b.Y:F2}), ({c.X:F2},{c.Y:F2}), priority={cross2:F6}");
+            _rejectedSmallArea++;
+            return 0.0;
         }
 
         return cross2;
@@ -795,7 +778,20 @@ public class RuppertRefiner : IDelaunayRefiner
 
     #region Insertion Methods
 
-    private static int _dequeueCount = 0;
+    private int _dequeueTotal;
+    private int _dequeueStillBad;
+    private int _dequeueNoLongerBad;
+    private int _rejectedNotInRegion;
+    private int _rejectedGhost;
+    private int _rejectedMeetsAngle;
+    private int _rejectedSeditious;
+    private int _rejectedSmallArea;
+    private int _insertionFailedCount;
+    private int _rejectedTooCloseToLast;
+    private int _rejectedTooCloseToNearest;
+    private int _verticesAdded;
+    private int _initialVertexCount;
+    private int _initialTriangleCount;
 
     private SimpleTriangle? NextBadTriangleFromQueue()
     {
@@ -803,6 +799,7 @@ public class RuppertRefiner : IDelaunayRefiner
         {
             var bt = _badTriangles.Dequeue();
             var rep = bt.RepEdge;
+            _dequeueTotal++;
 
             // Remove from deduplication set
             _inBadTriangleQueue.Remove(rep.GetBaseIndex());
@@ -811,17 +808,82 @@ public class RuppertRefiner : IDelaunayRefiner
             var p = TriangleBadPriority(t);
             if (p > 0.0)
             {
-                _dequeueCount++;
-                if (_dequeueCount % 100 == 1)
+                _dequeueStillBad++;
+                return t;
+            }
+            else
+            {
+                _dequeueNoLongerBad++;
+                // Log why triangles are no longer bad - need to check angle criterion
+                if (_dequeueNoLongerBad <= 20 || _dequeueNoLongerBad % 1000 == 0)
                 {
                     var a = t.GetVertexA();
                     var b = t.GetVertexB();
                     var c = t.GetVertexC();
-                    System.Diagnostics.Debug.WriteLine($"Dequeue bad triangle #{_dequeueCount}: ({a.X:F2},{a.Y:F2})-({b.X:F2},{b.Y:F2})-({c.X:F2},{c.Y:F2}), priority={p:F2}");
+
+                    // Compute angle criterion to see why it's no longer bad
+                    var ax = a.X; var ay = a.Y;
+                    var bx = b.X; var by = b.Y;
+                    var cx = c.X; var cy = c.Y;
+                    var abx = bx - ax; var aby = by - ay;
+                    var acx = cx - ax; var acy = cy - ay;
+                    var la = abx * abx + aby * aby;
+                    var lc = acx * acx + acy * acy;
+                    var dot = abx * acx + aby * acy;
+                    var lb = la + lc - 2.0 * dot;
+                    var cross = abx * acy - aby * acx;
+                    var cross2 = cross * cross;
+
+                    double pairProd;
+                    if (la <= lb && la <= lc) pairProd = lb * lc;
+                    else if (lb <= la && lb <= lc) pairProd = la * lc;
+                    else pairProd = la * lb;
+
+                    var threshMul = 4.0 * _rhoMin * _rhoMin;
+                    var minCross2 = 4.0 * _minTriangleArea * _minTriangleArea;
+                    var meetsAngle = pairProd < threshMul * cross2;
+                    var areaOk = cross2 > minCross2;
+
+                    // Compute actual angles to verify
+                    var lenA = Math.Sqrt(la); // AB
+                    var lenB = Math.Sqrt(lb); // BC
+                    var lenC = Math.Sqrt(lc); // CA
+                    // Angle at A (between AB and AC)
+                    var angleA = Math.Acos(dot / (lenA * lenC)) * 180.0 / Math.PI;
+                    // Angle at B (between BA and BC)
+                    var bax = ax - bx; var bay = ay - by;
+                    var bcx = cx - bx; var bcy = cy - by;
+                    var dotB = bax * bcx + bay * bcy;
+                    var angleB = Math.Acos(dotB / (lenA * lenB)) * 180.0 / Math.PI;
+                    // Angle at C
+                    var angleC = 180.0 - angleA - angleB;
+                    var minAngle = Math.Min(angleA, Math.Min(angleB, angleC));
+
+                    // Check constraint region membership for diagnostics
+                    var eA = t.GetEdgeA();
+                    var eB = t.GetEdgeB();
+                    var eC = t.GetEdgeC();
+                    var isMemberA = eA.IsConstraintRegionMember();
+                    var isMemberB = eB.IsConstraintRegionMember();
+                    var isMemberC = eC.IsConstraintRegionMember();
+
+                    System.Diagnostics.Debug.WriteLine($"Triangle no longer bad #{_dequeueNoLongerBad}: " +
+                        $"minAngle={minAngle:F1}° (A={angleA:F1}°, B={angleB:F1}°, C={angleC:F1}°), " +
+                        $"meetsAngle={meetsAngle}, areaOk={areaOk}, " +
+                        $"constraintMember=[{isMemberA},{isMemberB},{isMemberC}], " +
+                        $"rhoMin={_rhoMin:F3}, targetAngle={_minAngleRad * 180.0 / Math.PI:F1}°");
                 }
-                return t;
             }
         }
+
+        var finalVertexCount = _tin.GetVertices().Count;
+        var finalTriangleCount = _tin.CountTriangles().ValidTriangles;
+        System.Diagnostics.Debug.WriteLine($"=== RUPPERT REFINE() COMPLETE ===");
+        System.Diagnostics.Debug.WriteLine($"Vertices: {_initialVertexCount} -> {finalVertexCount} (+{_verticesAdded} added)");
+        System.Diagnostics.Debug.WriteLine($"Triangles: {_initialTriangleCount} -> {finalTriangleCount} (+{finalTriangleCount - _initialTriangleCount})");
+        System.Diagnostics.Debug.WriteLine($"Queue stats: total={_dequeueTotal}, stillBad={_dequeueStillBad}, noLongerBad={_dequeueNoLongerBad}");
+        System.Diagnostics.Debug.WriteLine($"Rejection stats: ghost={_rejectedGhost}, notInRegion={_rejectedNotInRegion}, meetsAngle={_rejectedMeetsAngle}, seditious={_rejectedSeditious}, smallArea={_rejectedSmallArea}");
+        System.Diagnostics.Debug.WriteLine($"Insertion stats: failed={_insertionFailedCount}, tooCloseToLast={_rejectedTooCloseToLast}, tooCloseToNearest={_rejectedTooCloseToNearest}");
         return null;
     }
 
@@ -920,14 +982,14 @@ public class RuppertRefiner : IDelaunayRefiner
 
         if (_lastInsertedVertex != null && _lastInsertedVertex.GetDistance(off.X, off.Y) <= nearVertexTol)
         {
-            System.Diagnostics.Debug.WriteLine($"InsertOffcenter: Too close to last inserted vertex, returning null");
+            _rejectedTooCloseToLast++;
             return null;
         }
 
         var nearest = NearestNeighbor(ox, oy);
         if (nearest != null && nearest.GetDistance(off.X, off.Y) <= nearVertexTol)
         {
-            System.Diagnostics.Debug.WriteLine($"InsertOffcenter: Too close to nearest vertex ({nearest.X:F2},{nearest.Y:F2}), returning null");
+            _rejectedTooCloseToNearest++;
             return null;
         }
 
@@ -1015,6 +1077,7 @@ public class RuppertRefiner : IDelaunayRefiner
     {
         _tin.Add(v);
         _lastInsertedVertex = v;
+        _verticesAdded++;
         _vdata[v] = new VData(type, corner, shell);
 
         // Check for new encroachments
@@ -1109,7 +1172,9 @@ public class RuppertRefiner : IDelaunayRefiner
             var t = new SimpleTriangle(e);
             var p = TriangleBadPriority(t);
             if (p > 0.0)
+            {
                 EnqueueBadTriangle(e, p);
+            }
         }
     }
 
