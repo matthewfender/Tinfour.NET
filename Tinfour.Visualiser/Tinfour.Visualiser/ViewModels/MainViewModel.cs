@@ -447,7 +447,8 @@ public partial class MainViewModel : ViewModelBase
                 var options = new RuppertOptions
                 {
                     MinimumAngleDegrees = this.RuppertMinAngle,
-                    MaxIterations = 100_000
+                    MaxIterations = 100_000,
+                    InterpolateZ = true  // Required for rasterization - interpolates Z values for new vertices
                 };
 
                 var refiner = new RuppertRefiner(this.Triangulation, options);
@@ -758,9 +759,11 @@ public partial class MainViewModel : ViewModelBase
         this.CanApplyRuppert = value?.Tin != null && value.Tin.IsBootstrapped() && value.Tin.GetConstraints().Count > 0;
 
         // Clear dependent results when triangulation changes
+        // IMPORTANT: Use property setters (not backing fields) to trigger PropertyChanged
+        // so the UI updates and clears the old visuals
         this.ContourResult = null;
-        this._interpolationResult = null;
-        this._voronoiResult = null;
+        this.InterpolationResult = null;
+        this.VoronoiResult = null;
 
         this.UpdateStatistics();
     }

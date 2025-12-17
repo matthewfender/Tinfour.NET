@@ -9,7 +9,9 @@
       "Bash(git merge:*)",
       "Bash(git checkout:*)",
       "Bash(dotnet clean:*)",
-      "Bash(dotnet add:*)"
+      "Bash(dotnet add:*)",
+      "Bash(dir:*)",
+      "Bash(findstr:*)"
     ]
   }
 }

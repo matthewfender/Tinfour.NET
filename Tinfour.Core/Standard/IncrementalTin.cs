@@ -1507,6 +1507,37 @@ public class IncrementalTin : IIncrementalTin
         {
             // Edge is not constrained, so we can flip it to restore Delaunay
             // This replaces edge ab (connecting a-b) with an edge connecting c-d
+            //
+            // After the flip, the edge dc will be the shared edge between two triangles:
+            //   - Triangle (d, c, a) with edges: dc, ca, ad
+            //   - Triangle (c, d, b) with edges: cd, db, bc
+            //
+            // We need to determine if the flipped edge should be interior.
+            // If all surrounding edges that are interior share the same constraint index,
+            // then the flipped edge should also be interior to that constraint.
+            var interiorConstraintIndex = -1;
+            var allInteriorSameIndex = true;
+
+            foreach (var surroundingEdge in new[] { bc, ca, ad, db })
+            {
+                if (surroundingEdge.IsConstraintRegionInterior())
+                {
+                    var idx = surroundingEdge.GetConstraintRegionInteriorIndex();
+                    if (interiorConstraintIndex < 0)
+                    {
+                        interiorConstraintIndex = idx;
+                    }
+                    else if (interiorConstraintIndex != idx)
+                    {
+                        // Different constraint indices - can't be sure what the flipped edge should be
+                        allInteriorSameIndex = false;
+                    }
+                }
+            }
+
+            // Clear the old flags - the edge is moving to a new position
+            ab.ClearConstraintRegionFlags();
+
             ab.SetVertices(d, c);
             ab.SetReverse(ad);
             ab.SetForward(ca);
@@ -1514,6 +1545,12 @@ public class IncrementalTin : IIncrementalTin
             ba.SetForward(db);
             ca.SetForward(ad);
             db.SetForward(bc);
+
+            // If surrounding edges are interior to the same constraint, mark the flipped edge as interior too
+            if (allInteriorSameIndex && interiorConstraintIndex >= 0)
+            {
+                ab.SetConstraintRegionInteriorIndex(interiorConstraintIndex);
+            }
         }
 
         // Recursively check the surrounding edges

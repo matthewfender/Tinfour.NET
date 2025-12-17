@@ -27,4 +27,8 @@
     <DebugType>portable</DebugType>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Clipper2" />
+  </ItemGroup>
+
 </Project>

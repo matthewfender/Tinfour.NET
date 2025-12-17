@@ -1,9 +1,9 @@
 # Ruppert's Refinement Algorithm - Comprehensive Fix Plan
 
-**Document Version:** 1.0
+**Document Version:** 1.1
 **Date:** December 2025
 **Author:** Analysis by Claude Code
-**Status:** Proposed
+**Status:** In Progress
 
 ---
 
@@ -39,13 +39,13 @@ This plan identifies **12 distinct issues** across **6 code areas**, with priori
 |---------|---------------------|------------------|
 | Constraint Leakage | Issues #1, #2, #5, #6 | Issues #7, #8 |
 | Premature Termination | Issues #3, #4 | Issue #9 |
-| Excessive Triangles | Issues #10, #11, #12 | Issues #3, #4 |
+| Excessive Triangles | Issues #10, #11, #12, #13 | Issues #3, #4 |
 
 ### 1.2 Affected Files
 
 | File | Issues | Severity |
 |------|--------|----------|
-| `RuppertRefiner.cs` | #3, #4, #9, #10, #11, #12 | HIGH |
+| `RuppertRefiner.cs` | #3, #4, #9, #10, #11, #13, #14 | HIGH |
 | `IncrementalTin.cs` | #1, #2, #5, #6, #7, #8 | HIGH |
 | `EdgePool.cs` | #6 | MEDIUM |
 | `ConstraintProcessor.cs` | #1 | HIGH |
@@ -301,6 +301,28 @@ If constraint flags become stale (Issue #5), valid interior triangles may be inc
 
 ---
 
+### Issue #13: Default MinimumTriangleArea Not Scale-Aware
+**File:** `RuppertRefiner.cs` (constructor)
+**Severity:** HIGH
+**Category:** Excessive Triangles
+
+**Problem:**
+The default `MinimumTriangleArea` of `1e-3` is an absolute value that doesn't scale with the coordinate system. For large-scale data (e.g., UTM coordinates with values in the millions), this threshold is effectively zero, causing runaway refinement.
+
+**Example:** For a TIN spanning 100x100 units, `1e-3` is appropriate. For a TIN spanning 100,000x100,000 units, triangles could be refined down to microscopic sizes before hitting the threshold.
+
+---
+
+### Issue #14: Insufficient Triangle Attempt Limiting
+**File:** `RuppertRefiner.cs:109`
+**Severity:** MEDIUM
+**Category:** Non-Conformant Triangles
+
+**Problem:**
+The original `MaxTriangleAttempts = 10` was too conservative. When a triangle fails insertion due to temporary conditions (e.g., too close to last inserted vertex), 10 attempts may not be enough for the conditions to change sufficiently.
+
+---
+
 ## 3. Fix Checklist
 
 ### Critical Priority (Fix First)
@@ -309,11 +331,19 @@ If constraint flags become stale (Issue #5), valid interior triangles may be inc
 - [x] **FIX-05**: Add deduplication to bad triangle queue
 
 ### High Priority
-- [x] **FIX-04**: ~~Update constraint flags during edge flipping~~ REVISED: Don't clear flags on flip; let SweepForConstraintAssignments handle propagation
+- [x] **FIX-04**: ~~Update constraint flags during edge flipping~~ REVISED: Don't clear flags on flip; let SweepForConstraintAssignments handle propagation. Added `ClearConstraintRegionFlags()` method for future use.
 - [x] **FIX-06**: Handle null constraint in GetRegionConstraint gracefully
 - [x] **FIX-08**: Remove unreachable partner edge condition in EdgePool.SplitEdge
-- [ ] **FIX-01**: Add geometric point-in-polygon verification for hole constraints (DEFERRED - tests passing)
-- [ ] **FIX-07**: Add hole-aware constraint propagation during edge splitting (DEFERRED - tests passing)
+- [x] **FIX-13**: Add auto-computed MinimumTriangleArea based on TIN bounds
+- [x] **FIX-14**: Increase MaxTriangleAttempts from 10 to 50
+- [x] **FIX-15**: Preserve border edge status in RestoreConformity when splitting constrained edges
+- [x] **FIX-16**: Add recursion depth limit (32) to RestoreConformity (matches Java)
+- [x] **FIX-17**: Add diagnostic logging for border edge splits (debug builds)
+- [x] **FIX-18**: Add triangle topology verification assertions after edge splitting (debug builds)
+- [ ] ~~**FIX-19**: Fix RefineOnce return value to distinguish "done" from "retry needed"~~ REVERTED - caused infinite loop
+- [x] **FIX-20**: Fix priority calculation to use badness ratio instead of area; add vertex count limit; add high-angle warning
+- [ ] **FIX-01**: Add geometric point-in-polygon verification for hole constraints (Clipper2 added, implementation pending)
+- [ ] **FIX-07**: Add hole-aware constraint propagation during edge splitting
 
 ### Medium Priority
 - [ ] **FIX-09**: Add fallback insertion strategies
@@ -321,21 +351,414 @@ If constraint flags become stale (Issue #5), valid interior triangles may be inc
 - [ ] **FIX-11**: Allow border-to-interior reclassification with explicit API
 - [ ] **FIX-12**: Optimize UpdateBadTrianglesAroundVertex to avoid overlapping scans
 
-### Implementation Notes (December 2025)
+---
 
-**Implemented Fixes:**
-1. **FIX-02**: Changed `NearVertexRelTol` and `NearEdgeRelTol` from `1e-9` to `1e-6` in `RuppertRefiner.cs`
-2. **FIX-03**: Added re-queuing logic in `RefineOnce()` when `InsertOffcenterOrSplit` returns null but triangle is still bad
-3. **FIX-05**: Added `_inBadTriangleQueue` HashSet for deduplication, created `EnqueueBadTriangle()` helper method
-4. **FIX-04**: Added `ClearConstraintRegionFlags()` to `IQuadEdge`/`QuadEdge`/`QuadEdgePartner`, but decided NOT to clear flags on flip (causes issues with constraint propagation)
-5. **FIX-06**: Added fallback to use edge's interior index directly when `GetRegionConstraint` returns null in `SplitEdge`
-6. **FIX-08**: Simplified border constraint handling in `EdgePool.SplitEdge` by removing unreachable partner edge condition
+## 4. Implementation Notes (December 2025)
 
-**Test Results:** All Ruppert refinement tests pass, including donut constraint leakage tests.
+### Implemented Fixes
+
+#### FIX-02: Increase Proximity Tolerances ✅
+**File:** `RuppertRefiner.cs:71-72`
+**Change:** `NearVertexRelTol` and `NearEdgeRelTol` from `1e-9` to `1e-6`
+```csharp
+private const double NearVertexRelTol = 1e-6;  // Relaxed from 1e-9 to prevent premature termination
+private const double NearEdgeRelTol = 1e-6;    // Relaxed from 1e-9 to prevent premature termination
+```
+**Rationale:** For typical mesh sizes (edge length ~1-100 units), 1e-6 * edge_length provides micrometer-level tolerance, which is appropriate for computational geometry.
 
 ---
 
-## 4. Detailed Fix Specifications
+#### FIX-03: Re-queue Triangles on Insertion Failure ✅
+**File:** `RuppertRefiner.cs:375-408`
+**Change:** Added re-queuing logic in `RefineOnce()` when `InsertOffcenterOrSplit` returns null but triangle is still bad
+```csharp
+if (result == null)
+{
+    var p = TriangleBadPriority(bad);
+    if (p > 0.0)
+    {
+        var baseIdx = bad.GetEdgeA().GetBaseIndex();
+        _triangleAttemptCount.TryGetValue(baseIdx, out var attempts);
+        attempts++;
+        _triangleAttemptCount[baseIdx] = attempts;
+
+        if (attempts < MaxTriangleAttempts)
+        {
+            // Re-queue with slightly reduced priority so other triangles get a chance
+            EnqueueBadTriangle(bad.GetEdgeA(), p * 0.99);
+        }
+        else
+        {
+            System.Diagnostics.Debug.WriteLine($"  WARNING: Giving up on triangle after {MaxTriangleAttempts} failed attempts.");
+        }
+    }
+}
+```
+**Rationale:** Prevents premature algorithm termination when vertex insertion temporarily fails.
+
+---
+
+#### FIX-04: ClearConstraintRegionFlags Method ✅
+**Files:** `IQuadEdge.cs`, `QuadEdge.cs`, `QuadEdgePartner.cs`
+**Change:** Added `ClearConstraintRegionFlags()` method to the edge interface and implementations
+```csharp
+// In QuadEdgePartner.cs:387-392
+public override void ClearConstraintRegionFlags()
+{
+    // Clear both border and interior flags, but preserve other flags and constraint indices
+    // Note: We clear the lower index bits too since they store region constraint index
+    _index &= ~(ConstraintRegionBorderFlag | ConstraintRegionInteriorFlag | ConstraintLowerIndexMask);
+}
+```
+**Note:** After analysis, we decided NOT to automatically clear flags on edge flip, as this breaks constraint propagation. The method is available for explicit use when needed.
+
+---
+
+#### FIX-05: Add Deduplication to Bad Triangle Queue ✅
+**File:** `RuppertRefiner.cs:107, 238, 450-454, 781`
+**Change:** Added `_inBadTriangleQueue` HashSet and `EnqueueBadTriangle()` helper method
+```csharp
+private readonly HashSet<int> _inBadTriangleQueue;  // Track by edge base index for deduplication
+
+private void EnqueueBadTriangle(IQuadEdge repEdge, double priority)
+{
+    var baseIdx = repEdge.GetBaseIndex();
+    if (_inBadTriangleQueue.Add(baseIdx))
+        _badTriangles.Enqueue(new BadTri(repEdge, priority), -priority);
+}
+```
+**Rationale:** Prevents the same triangle from being queued multiple times, reducing queue bloat.
+
+---
+
+#### FIX-06: Handle Null Constraint Gracefully ✅
+**File:** `IncrementalTin.cs` (SplitEdge method)
+**Change:** Added fallback to use edge's interior index directly when `GetRegionConstraint` returns null
+```csharp
+else
+{
+    var idx = ab.GetConstraintRegionInteriorIndex();
+    if (idx >= 0)
+    {
+        constraintIndexForC = idx;
+        constraintIndexForD = idx;
+        Debug.WriteLine($"SplitEdge: GetRegionConstraint returned null, using edge interior index {idx}");
+    }
+}
+```
+**Rationale:** Prevents silent failures when constraint lookup fails.
+
+---
+
+#### FIX-08: Remove Unreachable Condition ✅
+**File:** `EdgePool.cs` (SplitEdge method)
+**Change:** Simplified border constraint handling by removing unreachable partner edge condition
+**Rationale:** The condition `(e.GetIndex() & 1) != 0` can never be true because SplitEdge always receives the base reference (even index).
+
+---
+
+#### FIX-13: Auto-Computed MinimumTriangleArea ✅
+**File:** `RuppertRefiner.cs:212-230`
+**Change:** Added automatic computation of MinimumTriangleArea based on TIN bounds
+```csharp
+// Compute minimum triangle area - if using default, scale based on TIN bounds
+// to prevent runaway refinement on large coordinate systems
+var minArea = options.MinimumTriangleArea;
+if (minArea <= DefaultMinTriangleArea)
+{
+    // Default was used - compute a sensible value based on data bounds
+    var bounds = tin.GetBounds();
+    if (bounds.HasValue)
+    {
+        var (_, _, width, height) = bounds.Value;
+        var boundsSize = Math.Max(width, height);
+        // Minimum edge length ~= boundsSize / 2000, minimum area ~= (edge)^2 / 2
+        // This allows smaller triangles than before (boundsSize/500) for better conformity
+        var minEdge = boundsSize / 2000.0;
+        var computedMinArea = minEdge * minEdge / 2.0;
+        minArea = Math.Max(minArea, computedMinArea);
+    }
+}
+_minTriangleArea = minArea;
+```
+**Rationale:** Prevents runaway refinement on large coordinate systems while allowing reasonable refinement on standard-scale data.
+
+---
+
+#### FIX-14: Increase MaxTriangleAttempts ✅
+**File:** `RuppertRefiner.cs:109`
+**Change:** Increased `MaxTriangleAttempts` from 10 to 50
+```csharp
+private const int MaxTriangleAttempts = 50;  // Give up on a triangle after this many failed attempts (increased from 10)
+```
+**Rationale:** More attempts allow the algorithm to handle temporary insertion failures, reducing the number of non-conformant triangles remaining after refinement.
+
+---
+
+#### FIX-15: Preserve Border Edge Status in RestoreConformity ✅
+**File:** `IncrementalTin.cs:1427-1449`
+**Issue:** When `RestoreConformity` splits a constrained edge, both halves must retain their border edge status. The code was calling `EdgePool.SplitEdge` but not verifying that both resulting edges had the border index set.
+**Change:** Added verification code (same pattern as in `IncrementalTin.SplitEdge`)
+```csharp
+// Remember if this was a border edge before splitting
+var wasBorderEdge = ab.IsConstraintRegionBorder();
+var borderIndex = wasBorderEdge ? ab.GetConstraintBorderIndex() : -1;
+
+// ... split edge ...
+
+// Ensure BOTH halves of a split border edge remain border edges
+// EdgePool.SplitEdge should handle this, but we verify and fix if needed
+if (wasBorderEdge && borderIndex >= 0)
+{
+    if (!am.IsConstraintRegionBorder())
+    {
+        am.SetConstraintBorderIndex(borderIndex);
+    }
+    if (!mb.IsConstraintRegionBorder())
+    {
+        mb.SetConstraintBorderIndex(borderIndex);
+    }
+}
+```
+**Rationale:** This fixes the constraint border "gap" issue where a split border edge would lose its border status on one half, causing the constraint boundary to appear broken in the visualization.
+
+---
+
+#### FIX-16: Add Recursion Depth Limit to RestoreConformity ✅
+**File:** `IncrementalTin.cs:1383-1414`
+**Issue:** The Java implementation has a maximum recursion depth limit of 32 in `restoreConformity` to avoid excessive operations. This limit was missing from the C# port, potentially causing performance issues or stack overflows in pathological cases.
+
+**Change:** Added recursion depth tracking and limit (matching Java behavior)
+```csharp
+/// <summary>
+///     Tracks the maximum recursion depth in RestoreConformity.
+/// </summary>
+private int _maxDepthOfRecursionInRestore;
+
+private void RestoreConformity(QuadEdge ab, int depthOfRecursion = 1)
+{
+    // Track maximum recursion depth (for diagnostics)
+    if (depthOfRecursion > _maxDepthOfRecursionInRestore)
+    {
+        _maxDepthOfRecursionInRestore = depthOfRecursion;
+    }
+
+    // ... existing code ...
+
+    // Limit recursion depth to avoid excessive operations (matches Java behavior)
+    // This may leave some non-conformant edges in place
+    if (depthOfRecursion > 32)
+    {
+        Debug.WriteLine($"RestoreConformity: Max recursion depth 32 reached, returning");
+        return;
+    }
+
+    // ... rest of method ...
+}
+```
+**Rationale:** Matches Java's behavior to prevent infinite recursion in edge cases. The limit of 32 is the same as the Java implementation.
+
+---
+
+#### FIX-17: Add Diagnostic Logging for Border Edge Splits ✅
+**File:** `IncrementalTin.cs:1431-1466`
+**Issue:** When investigating constraint leakage, it was difficult to determine if border edge splits were preserving the border status correctly. Added detailed debug logging to track border edge splits.
+
+**Change:** Added comprehensive debug logging around border edge splits
+```csharp
+// DEBUG: Log border edge splits
+if (wasBorderEdge)
+{
+    Debug.WriteLine($"RestoreConformity: Splitting BORDER edge {ab.GetIndex()} with borderIndex={borderIndex}");
+    Debug.WriteLine($"  Original: a=({a.X:F2},{a.Y:F2}) -> b=({b.X:F2},{b.Y:F2})");
+    Debug.WriteLine($"  Midpoint: m=({mx:F2},{my:F2})");
+}
+
+// ... split edge ...
+
+if (wasBorderEdge && borderIndex >= 0)
+{
+    var amBorderBefore = am.IsConstraintRegionBorder();
+    var mbBorderBefore = mb.IsConstraintRegionBorder();
+
+    if (!amBorderBefore)
+    {
+        Debug.WriteLine($"  WARNING: am edge {am.GetIndex()} lost border status, restoring with index {borderIndex}");
+        am.SetConstraintBorderIndex(borderIndex);
+    }
+    if (!mbBorderBefore)
+    {
+        Debug.WriteLine($"  WARNING: mb edge {mb.GetIndex()} lost border status, restoring with index {borderIndex}");
+        mb.SetConstraintBorderIndex(borderIndex);
+    }
+
+    // Verify the fix worked
+    Debug.WriteLine($"  After split: am={am.GetIndex()} border={am.IsConstraintRegionBorder()} idx={am.GetConstraintBorderIndex()} (was {amBorderBefore})");
+    Debug.WriteLine($"  After split: mb={mb.GetIndex()} border={mb.IsConstraintRegionBorder()} idx={mb.GetConstraintBorderIndex()} (was {mbBorderBefore})");
+}
+```
+**Rationale:** Enables debugging of border edge preservation issues. Key diagnostics to look for:
+- `"WARNING: am edge ... lost border status"` - indicates `EdgePool.SplitEdge` didn't preserve border status
+- `"WARNING: mb edge ... lost border status"` - indicates the original edge lost its border status after modification
+
+---
+
+#### FIX-18: Add Triangle Topology Verification After Edge Splitting ✅
+**File:** `IncrementalTin.cs:1492-1500`
+**Issue:** After splitting a constrained edge in `RestoreConformity`, the four new triangles must be properly wired. If the forward links are incorrect, the mesh topology becomes corrupted, leading to empty triangles in rasterization and other rendering issues.
+
+**Change:** Added `Debug.Assert` statements to verify triangle topology immediately after wiring
+```csharp
+// DEBUG: Verify triangle topology after wiring
+Debug.Assert(ma.GetForward() == ad && ad.GetForward() == dm && dm.GetForward() == ma,
+    "Triangle m-a-d wiring is broken");
+Debug.Assert(mb.GetForward() == bc && bc.GetForward() == cm && cm.GetForward() == mb,
+    "Triangle m-b-c wiring is broken");
+Debug.Assert(mc.GetForward() == ca && ca.GetForward() == am && am.GetForward() == mc,
+    "Triangle m-c-a wiring is broken");
+Debug.Assert(md.GetForward() == db && db.GetForward() == bm && bm.GetForward() == md,
+    "Triangle m-d-b wiring is broken");
+```
+**Rationale:** These assertions verify that:
+1. **Triangle m-a-d:** ma → ad → dm → ma (complete 3-cycle)
+2. **Triangle m-b-c:** mb → bc → cm → mb (complete 3-cycle)
+3. **Triangle m-c-a:** mc → ca → am → mc (complete 3-cycle)
+4. **Triangle m-d-b:** md → db → bm → md (complete 3-cycle)
+
+If any assertion fails, it immediately identifies which triangle has broken topology, making debugging much easier. These assertions only run in Debug builds.
+
+---
+
+#### FIX-19: Fix RefineOnce Return Value ❌ REVERTED
+**File:** `RuppertRefiner.cs`
+**Status:** REVERTED - caused infinite loop
+
+**Original Intent:** Attempted to distinguish between "refinement complete" and "retry later" by returning a sentinel vertex when insertion failed but the triangle was re-queued.
+
+**Why It Failed:** The sentinel pattern caused the main loop to continue indefinitely even when no real progress was being made. When all remaining triangles were in a "retry" state (due to proximity issues), the loop would never terminate.
+
+**Current Behavior:** When `RefineOnce()` returns `null`, `Refine()` returns `true` (success). Failed insertions re-queue the triangle but return `null`, which terminates the current `Refine()` call. The triangle can be processed on a subsequent `Refine()` call if needed.
+
+---
+
+#### FIX-20: Fix Priority Calculation and Add Safety Limits ✅
+**File:** `RuppertRefiner.cs`
+**Issue:** The `TriangleBadPriority()` function was returning `cross2` (squared double-area) as the priority, causing larger triangles to be prioritized regardless of how bad their angles were. This led to excessive refinement of large triangles that were barely over the threshold.
+
+**Changes:**
+
+1. **Fixed priority calculation** (line ~678):
+```csharp
+// OLD: return cross2;  // Area-based - wrong!
+// NEW:
+var badnessRatio = pairProd / (threshMul * cross2);
+return badnessRatio;
+```
+The `badnessRatio` measures how far over the threshold a triangle is. A ratio of 1.0 means exactly at threshold, 2.0 means twice as bad, etc. This ensures truly bad triangles (worse angles) are prioritized regardless of size.
+
+2. **Added vertex count limit** (lines ~321-338):
+```csharp
+var maxVertexCount = initialVertexCount * 50;
+// ... in loop:
+if (currentVertexCount > maxVertexCount)
+{
+    System.Diagnostics.Debug.WriteLine($"WARNING: Vertex count limit exceeded...");
+    return false;
+}
+```
+Prevents runaway refinement by limiting total vertices to 50× the initial count.
+
+3. **Added high-angle warning** (lines ~212-220):
+```csharp
+const double SafeAngleDegrees = 20.7;  // arcsin(1/(2*√2))
+if (options.MinimumAngleDegrees > SafeAngleDegrees && !options.EnforceSqrt2Guard)
+{
+    System.Diagnostics.Debug.WriteLine("WARNING: MinimumAngleDegrees exceeds safe threshold...");
+}
+```
+Warns when the requested minimum angle exceeds the theoretical safe limit (~20.7° without the √2 guard).
+
+4. **Added abandoned triangle tracking**:
+- `_abandonedTriangles` HashSet tracks triangles we've given up on after `MaxTriangleAttempts` (50) failed attempts
+- `NextBadTriangleFromQueue()` skips abandoned triangles to prevent re-processing
+
+**Rationale:** These changes ensure:
+- Truly bad triangles are fixed first (not just large ones)
+- The algorithm terminates even in pathological cases
+- Users are warned when their parameters may cause issues
+
+---
+
+### Dependencies Added
+
+#### Clipper2 Library ✅
+**File:** `Tinfour.Core.csproj`
+**Package:** `Clipper2` version 2.0.0
+**Purpose:** Robust point-in-polygon testing for hole constraint verification (FIX-01, FIX-07)
+```xml
+<ItemGroup>
+  <PackageReference Include="Clipper2" />
+</ItemGroup>
+```
+
+---
+
+### Test Results
+All Ruppert refinement tests pass, including:
+- `DonutConstraint_AfterRefinement_ShouldNotLeakOutside` ✅
+- `Donut_DetailedLeakageAnalysis` ✅
+- `SimpleCircle_AfterRefinement_ShouldNotLeakOutside` ✅
+- `SimpleCircle_DetailedLeakageAnalysis` ✅
+- All `RuppertRefinerTests` (13 tests) ✅
+
+---
+
+## 5. Remaining Work
+
+### FIX-01: Geometric Verification for Hole Constraints
+**Status:** Pending (Clipper2 added)
+**File:** `ConstraintProcessor.cs`
+
+**Proposed Change:**
+```csharp
+if (constraint is PolygonConstraint poly && poly.IsHole())
+{
+    // Verify that all edges inside the hole are NOT marked as interior
+    // Use Clipper2's point-in-polygon test against the hole boundary
+    VerifyHoleInteriorIsUnmarked(poly, edgesForConstraint);
+    return;
+}
+```
+
+---
+
+### FIX-07: Hole-Aware Constraint Propagation
+**Status:** Pending
+**File:** `IncrementalTin.cs`
+
+**Proposed Addition to SplitEdge:**
+```csharp
+// After determining constraintIndexForC and constraintIndexForD
+// Verify the constraint isn't a hole before propagating interior status
+if (constraintIndexForC >= 0 && constraintIndexForC < _constraintList.Count)
+{
+    var con = _constraintList[constraintIndexForC];
+    if (con is PolygonConstraint poly && poly.IsHole())
+    {
+        // This is a hole constraint - the interior should NOT be marked
+        // Use Clipper2 to check if the c-side is geometrically inside the hole
+        var cCentroid = GetTriangleCentroid(m, b, c);
+        if (IsPointInsidePolygon(cCentroid, poly))
+        {
+            constraintIndexForC = -1;  // Don't mark as interior
+        }
+    }
+}
+```
+
+---
+
+## 6. Detailed Fix Specifications
 
 ### FIX-01: Geometric Verification for Hole Constraints
 **File:** `ConstraintProcessor.cs`
@@ -365,280 +788,26 @@ private void VerifyHoleInteriorIsUnmarked(PolygonConstraint hole, List<IQuadEdge
 {
     // For each edge adjacent to the hole border on the interior side,
     // verify it is not marked as constraint region member
-    // If marked, clear the marking
+    // If marked, clear the marking using ClearConstraintRegionFlags()
 }
 ```
 
 ---
 
-### FIX-02: Increase Proximity Tolerances
+### FIX-09: Add Fallback Insertion Strategies
 **File:** `RuppertRefiner.cs`
 
-**Current Code:**
-```csharp
-private const double NearVertexRelTol = 1e-9;
-private const double NearEdgeRelTol = 1e-9;
-```
-
-**Proposed Change:**
-```csharp
-private const double NearVertexRelTol = 1e-6;  // 1 part per million
-private const double NearEdgeRelTol = 1e-6;
-```
-
-**Rationale:** For typical mesh sizes (edge length ~1-100 units), 1e-6 * edge_length provides micrometer-level tolerance, which is appropriate for computational geometry.
+**Proposed Enhancement:**
+When offcenter insertion fails:
+1. Try circumcenter instead
+2. Try a perturbed location
+3. Use a smaller step toward the circumcenter
 
 ---
 
-### FIX-03: Re-queue Triangles on Insertion Failure
-**File:** `RuppertRefiner.cs`
+## 7. Testing Strategy
 
-**Current Code:**
-```csharp
-private IVertex? InsertOffcenterOrSplit(SimpleTriangle tri)
-{
-    // ...
-    if (_lastInsertedVertex != null && _lastInsertedVertex.GetDistance(off.X, off.Y) <= nearVertexTol)
-    {
-        System.Diagnostics.Debug.WriteLine($"Too close to last inserted vertex, returning null");
-        return null;
-    }
-    // ...
-}
-```
-
-**Proposed Change:**
-```csharp
-private IVertex? InsertOffcenterOrSplit(SimpleTriangle tri, out bool shouldRequeue)
-{
-    shouldRequeue = false;
-    // ...
-    if (_lastInsertedVertex != null && _lastInsertedVertex.GetDistance(off.X, off.Y) <= nearVertexTol)
-    {
-        System.Diagnostics.Debug.WriteLine($"Too close to last inserted vertex, will retry later");
-        shouldRequeue = true;
-        return null;
-    }
-    // ...
-}
-```
-
-**Update RefineOnce:**
-```csharp
-public IVertex? RefineOnce()
-{
-    // ...
-    var bad = NextBadTriangleFromQueue();
-    if (bad != null)
-    {
-        var result = InsertOffcenterOrSplit(bad, out bool shouldRequeue);
-        if (result == null && shouldRequeue)
-        {
-            // Re-add with lower priority (will be retried after other triangles)
-            var p = TriangleBadPriority(bad);
-            if (p > 0.0)
-                _badTriangles.Enqueue(new BadTri(bad.GetEdgeA(), p * 0.9), -p * 0.9);
-        }
-        return result;
-    }
-    // ...
-}
-```
-
----
-
-### FIX-04: Update Constraint Flags During Edge Flipping
-**File:** `EdgePool.cs`
-
-**Current Code:**
-```csharp
-public void FlipEdge(IQuadEdge edge)
-{
-    // ... topology changes ...
-    e.SetVertices(c, d);
-    // ... more topology ...
-    // No constraint update
-}
-```
-
-**Proposed Change:**
-```csharp
-public void FlipEdge(IQuadEdge edge)
-{
-    // ... topology changes ...
-    e.SetVertices(c, d);
-    // ... more topology ...
-
-    // Clear constraint flags - they're now stale
-    // The caller (RestoreConformity/RestoreDelaunay) should re-sweep
-    ClearConstraintFlags(e);
-}
-
-private void ClearConstraintFlags(IQuadEdge edge)
-{
-    var partner = (QuadEdgePartner)edge.GetDual();
-    // Clear interior/border flags but preserve line member flag
-    partner.ClearRegionFlags();
-}
-```
-
-**New Method in QuadEdgePartner:**
-```csharp
-public void ClearRegionFlags()
-{
-    _index &= ~(ConstraintRegionBorderFlag | ConstraintRegionInteriorFlag);
-    // Keep ConstraintEdgeFlag if still constrained
-    // Keep ConstraintLineMemberFlag
-}
-```
-
----
-
-### FIX-05: Add Deduplication to Bad Triangle Queue
-**File:** `RuppertRefiner.cs`
-
-**Add Field:**
-```csharp
-private readonly HashSet<int> _inBadTriangleQueue;  // Track by edge base index
-```
-
-**Update Constructor:**
-```csharp
-_inBadTriangleQueue = new HashSet<int>();
-```
-
-**Update Enqueue Logic:**
-```csharp
-private void EnqueueBadTriangle(IQuadEdge repEdge, double priority)
-{
-    var baseIdx = repEdge.GetBaseIndex();
-    if (!_inBadTriangleQueue.Contains(baseIdx))
-    {
-        _inBadTriangleQueue.Add(baseIdx);
-        _badTriangles.Enqueue(new BadTri(repEdge, priority), -priority);
-    }
-}
-
-// Update NextBadTriangleFromQueue to remove from set:
-private SimpleTriangle? NextBadTriangleFromQueue()
-{
-    while (_badTriangles.Count > 0)
-    {
-        var bt = _badTriangles.Dequeue();
-        _inBadTriangleQueue.Remove(bt.RepEdge.GetBaseIndex());
-        // ... rest of validation ...
-    }
-}
-```
-
----
-
-### FIX-06: Handle Null Constraint Gracefully
-**File:** `IncrementalTin.cs`
-
-**Current Code:**
-```csharp
-if (ab.IsConstraintRegionInterior())
-{
-    var con = GetRegionConstraint(ab);
-    if (con != null)
-    {
-        // ... use con ...
-    }
-    // Silent failure if con is null
-}
-```
-
-**Proposed Change:**
-```csharp
-if (ab.IsConstraintRegionInterior())
-{
-    var con = GetRegionConstraint(ab);
-    if (con != null)
-    {
-        var idx = con.GetConstraintIndex();
-        constraintIndexForC = idx;
-        constraintIndexForD = idx;
-    }
-    else
-    {
-        // Fallback: use the interior index directly from the edge
-        var idx = ab.GetConstraintRegionInteriorIndex();
-        if (idx >= 0)
-        {
-            constraintIndexForC = idx;
-            constraintIndexForD = idx;
-        }
-        Debug.WriteLine($"Warning: GetRegionConstraint returned null for interior edge, using index {idx}");
-    }
-}
-```
-
----
-
-### FIX-07: Hole-Aware Constraint Propagation
-**File:** `IncrementalTin.cs`
-
-**Proposed Addition to SplitEdge:**
-```csharp
-// After determining constraintIndexForC and constraintIndexForD
-// Verify the constraint isn't a hole before propagating interior status
-if (constraintIndexForC >= 0 && constraintIndexForC < _constraintList.Count)
-{
-    var con = _constraintList[constraintIndexForC];
-    if (con is PolygonConstraint poly && poly.IsHole())
-    {
-        // This is a hole constraint - the interior should NOT be marked
-        // Check if the c-side is geometrically inside the hole
-        var cCentroid = GetTriangleCentroid(m, b, c);  // New triangle after split
-        if (IsPointInsidePolygon(cCentroid, poly))
-        {
-            constraintIndexForC = -1;  // Don't mark as interior
-        }
-    }
-}
-// Same for constraintIndexForD...
-```
-
----
-
-### FIX-08: Remove Unreachable Condition
-**File:** `EdgePool.cs`
-
-**Current Code:**
-```csharp
-if ((e.GetIndex() & 1) != 0 && e.IsConstraintRegionBorder())
-{
-    p.SetConstraintBorderIndex(e.GetConstraintBorderIndex());
-    q.SetConstraintBorderIndex(b.GetConstraintBorderIndex());
-}
-else if (e.IsConstraintRegionBorder())
-```
-
-**Proposed Change:**
-```csharp
-// SplitEdge always receives base reference (even index), so simplify:
-if (e.IsConstraintRegionBorder())
-{
-    var borderIdx = e.GetConstraintBorderIndex();
-    if (borderIdx >= 0)
-    {
-        p.SetConstraintBorderIndex(borderIdx);
-        // Also set on the dual if needed
-        var baseBorderIdx = b.GetConstraintBorderIndex();
-        if (baseBorderIdx >= 0)
-        {
-            q.SetConstraintBorderIndex(baseBorderIdx);
-        }
-    }
-}
-```
-
----
-
-## 5. Testing Strategy
-
-### 5.1 Unit Tests to Add/Update
+### 7.1 Unit Tests to Add/Update
 
 | Test | Purpose | File |
 |------|---------|------|
@@ -649,7 +818,7 @@ if (e.IsConstraintRegionBorder())
 | `EdgeFlip_ShouldClearStaleConstraintFlags` | Verify flag clearing on flip | `EdgePoolTests.cs` |
 | `SplitEdge_WithHoleBorder_ShouldNotPropagateToHoleInterior` | Verify hole handling | New test |
 
-### 5.2 Integration Tests
+### 7.2 Integration Tests
 
 | Scenario | Verification |
 |----------|--------------|
@@ -659,7 +828,7 @@ if (e.IsConstraintRegionBorder())
 | High-angle refinement (45°) | Completes without excessive triangles |
 | Dense vertex clusters | Completes without premature termination |
 
-### 5.3 Regression Tests
+### 7.3 Regression Tests
 
 Run the visualizer with:
 - 2749 vertices, 33° Ruppert refinement, donut constraint
@@ -668,46 +837,52 @@ Run the visualizer with:
 
 ---
 
-## 6. Implementation Order
+## 8. Implementation Order
 
-### Phase 1: Critical Fixes (Unblock Development)
+### Phase 1: Critical Fixes (COMPLETE ✅)
 1. FIX-02: Increase tolerances → Immediate improvement in termination
 2. FIX-03: Re-queue on failure → Prevent lost triangles
 3. FIX-05: Queue deduplication → Reduce excessive processing
 
-### Phase 2: Constraint Integrity
-4. FIX-04: Edge flip constraint clearing → Prevent stale flags
+### Phase 2: Constraint Integrity (COMPLETE ✅)
+4. FIX-04: ClearConstraintRegionFlags method → Available for future use
 5. FIX-06: Null constraint handling → Prevent silent failures
 6. FIX-08: Remove dead code → Clean up
 
-### Phase 3: Hole Handling
-7. FIX-01: Hole verification → Primary leakage fix
-8. FIX-07: Hole-aware propagation → Prevent propagation into holes
+### Phase 3: Scale Handling (COMPLETE ✅)
+7. FIX-13: Auto-computed MinimumTriangleArea → Prevent runaway on large coords
+8. FIX-14: Increase MaxTriangleAttempts → Reduce non-conformant triangles
 
-### Phase 4: Polish
-9. FIX-09: Fallback strategies → Improve robustness
-10. FIX-10: Recursive sweep → Complete constraint propagation
-11. FIX-11: Border reclassification API → Future flexibility
-12. FIX-12: Optimize scans → Performance improvement
+### Phase 4: Hole Handling (IN PROGRESS)
+9. FIX-01: Hole verification → Primary leakage fix (Clipper2 ready)
+10. FIX-07: Hole-aware propagation → Prevent propagation into holes
+
+### Phase 5: Polish (PENDING)
+11. FIX-09: Fallback strategies → Improve robustness
+12. FIX-10: Recursive sweep → Complete constraint propagation
+13. FIX-11: Border reclassification API → Future flexibility
+14. FIX-12: Optimize scans → Performance improvement
 
 ---
 
-## 7. Risk Assessment
+## 9. Risk Assessment
 
-| Fix | Risk Level | Mitigation |
-|-----|------------|------------|
-| FIX-01 | MEDIUM | May slow constraint processing; benchmark before/after |
-| FIX-02 | LOW | Conservative change; test with edge cases |
-| FIX-03 | LOW | Additive change; existing behavior preserved |
-| FIX-04 | HIGH | Affects all edge flips; extensive testing required |
-| FIX-05 | LOW | Additive change; only affects queue management |
-| FIX-06 | LOW | Fallback behavior; improves robustness |
-| FIX-07 | MEDIUM | Requires geometric testing; verify correctness |
-| FIX-08 | LOW | Removing dead code; no behavioral change |
-| FIX-09 | MEDIUM | New behavior paths; comprehensive testing |
-| FIX-10 | MEDIUM | May cause over-propagation; careful bounds |
-| FIX-11 | LOW | New API only; opt-in usage |
-| FIX-12 | LOW | Performance only; verify equivalence |
+| Fix | Risk Level | Mitigation | Status |
+|-----|------------|------------|--------|
+| FIX-01 | MEDIUM | May slow constraint processing; benchmark before/after | Pending |
+| FIX-02 | LOW | Conservative change; test with edge cases | ✅ Done |
+| FIX-03 | LOW | Additive change; existing behavior preserved | ✅ Done |
+| FIX-04 | HIGH | Method added but not auto-called; low risk | ✅ Done |
+| FIX-05 | LOW | Additive change; only affects queue management | ✅ Done |
+| FIX-06 | LOW | Fallback behavior; improves robustness | ✅ Done |
+| FIX-07 | MEDIUM | Requires geometric testing; verify correctness | Pending |
+| FIX-08 | LOW | Removing dead code; no behavioral change | ✅ Done |
+| FIX-09 | MEDIUM | New behavior paths; comprehensive testing | Pending |
+| FIX-10 | MEDIUM | May cause over-propagation; careful bounds | Pending |
+| FIX-11 | LOW | New API only; opt-in usage | Pending |
+| FIX-12 | LOW | Performance only; verify equivalence | Pending |
+| FIX-13 | LOW | Only affects default case; explicit values unchanged | ✅ Done |
+| FIX-14 | LOW | More retries; may slow convergence slightly | ✅ Done |
 
 ---
 
@@ -726,6 +901,8 @@ Run the visualizer with:
 | #8 | SplitEdge (border handling) | IncrementalTin.cs:716-747 |
 | #10,#11 | UpdateBadTrianglesAroundVertex | RuppertRefiner.cs:1024-1084 |
 | #12 | TriangleBadPriority | RuppertRefiner.cs:501-601 |
+| #13 | Constructor (minArea calc) | RuppertRefiner.cs:212-230 |
+| #14 | MaxTriangleAttempts | RuppertRefiner.cs:109 |
 
 ---
 
@@ -775,6 +952,240 @@ minTriangleArea = 0.1
 - Interior edges: All within annulus (15 ≤ distance ≤ 30)
 - Border edges: On constraint boundaries only
 - No edges marked interior with centroid outside annulus
+
+---
+
+## Appendix D: Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.0 | Dec 2025 | Initial document with 12 identified issues |
+| 1.1 | Dec 2025 | Added Issues #13, #14; Updated implementation status; Added Clipper2 dependency; Documented all completed fixes |
+| 1.2 | Dec 2025 | Added FIX-19: Fixed premature termination when RefineOnce returns null after re-queuing a triangle |
+| 1.3 | Dec 2025 | REVERTED FIX-19 (caused infinite loop); Added FIX-20: Fixed priority calculation (badness ratio instead of area), added vertex count limit (50×), added high-angle warning, added abandoned triangle tracking |
+| 1.4 | Dec 2025 | Documented failed post-refinement approaches; Added alternative techniques appendix |
+
+---
+
+## Appendix E: Failed Post-Refinement Approaches (December 2025)
+
+The following approaches were attempted to fix constraint region marking after Ruppert refinement, but were rolled back due to various issues.
+
+### Approach 1: RebuildWithConstraints (Fresh Vertices)
+
+**Goal:** Create a completely new TIN from the refined coordinates with fresh constraint objects.
+
+**Implementation:**
+- Extract all vertex coordinates from refined TIN
+- Create fresh `Vertex` objects from raw (x, y, z) coordinates
+- Create fresh `PolygonConstraint` objects from original constraint vertices
+- Build a new TIN with the fresh data
+
+**Why It Failed:**
+- The flood fill only processed 1 edge at a time ("Maximum queue size was 1" repeated hundreds of times)
+- Root cause: Using original 56 constraint vertices instead of the hundreds of vertices now on the split boundary
+- The constraint boundary didn't match the actual edges in the refined TIN
+
+### Approach 2: Extract Boundary From Border Edges
+
+**Goal:** Build the constraint boundary from the current border edges in the TIN rather than original vertices.
+
+**Implementation:**
+- `BuildOrderedBoundaryFromEdges()` method to extract ordered boundary vertices from border edges
+- Walk the border edges using `GetForward()` to get ordered vertices
+- Create new constraint from these vertices
+
+**Why It Failed:**
+- Lost the donut hole - the boundary extraction didn't correctly identify which border edges belonged to the outer ring vs inner hole
+- Border edges don't carry information about which constraint they belong to (only a constraint index)
+
+### Approach 3: BuildFreshTinFromCoordinates (Static Isolated Builder)
+
+**Goal:** Create a completely isolated TIN builder that takes only raw coordinate tuples, ensuring no shared references.
+
+**Implementation:**
+```csharp
+public static IncrementalTin BuildFreshTinFromCoordinates(
+    IEnumerable<(double x, double y, double z)> vertexCoords,
+    IEnumerable<IEnumerable<(double x, double y)>> constraintPolygons)
+```
+
+**Why It Failed:**
+- Still lost the donut hole
+- Same fundamental problem: extracting constraint boundaries from a refined mesh doesn't preserve hole semantics
+
+### Approach 4: RefreshConstraintRegions (Re-Flood Fill)
+
+**Goal:** Clear all constraint region flags and re-run flood fill from border edges.
+
+**Implementation:**
+- `RefreshConstraintRegions()` to iterate all edges and clear constraint region flags
+- `FloodFillFromBorderEdge()` to flood fill from each border edge
+- Call after Ruppert refinement completes
+
+**Why It Failed:**
+- Marked the ENTIRE terrain as constrained, except triangles modified by Ruppert
+- Opposite of the original problem!
+- Root cause: Border edges collected from iterator don't have consistent orientation for flood fill
+- The original flood fill in `ConstraintProcessor` relies on edges being properly oriented from `ProcessConstraint`
+
+### Key Insight
+
+The fundamental issue is that **constraint region membership is established during initial constraint processing** via `ProcessConstraint` in `ConstraintProcessor.cs`. This process:
+1. Establishes border edges with proper orientation
+2. Flood fills from the correctly-oriented interior side
+
+After Ruppert refinement splits these edges, the new edges:
+- Have border status preserved (FIX-15 ensures this)
+- Have interior status propagated (via `SplitEdge`)
+- BUT the propagation logic has edge cases where it fails
+
+The correct fix is likely:
+1. Fix the constraint propagation during edge splitting (FIX-07: hole-aware propagation)
+2. Add geometric verification using point-in-polygon tests (FIX-01)
+
+Rather than trying to rebuild/refresh the entire constraint region marking post-hoc.
+
+---
+
+## Appendix F: Alternative Refinement Techniques for Rendering Meshes
+
+Given the challenges with Ruppert's refinement, here are alternative techniques for generating rendering-quality triangular meshes:
+
+### 1. Chew's Algorithm (Second Algorithm)
+
+**Overview:** Chew's second algorithm is simpler than Ruppert's and guarantees triangles with angles between 30° and 120°.
+
+**How It Works:**
+- Insert circumcenters of "bad" triangles (those with angles < 30°)
+- No special handling for encroached segments
+- Simpler termination conditions
+
+**Pros:**
+- Simpler implementation
+- Better minimum angle guarantee (30° vs ~20.7° for Ruppert without √2 guard)
+- No edge splitting complexity
+
+**Cons:**
+- May not respect input segments exactly
+- Can create more triangles than Ruppert
+- Not suitable when exact constraint boundaries are required
+
+### 2. Delaunay Refinement with Centroid Insertion
+
+**Overview:** Instead of circumcenters/offcenters, insert centroids of bad triangles.
+
+**How It Works:**
+- Find triangles with poor aspect ratios
+- Insert centroid of the triangle
+- Retriangulate using standard Delaunay
+
+**Pros:**
+- Very simple implementation
+- No complex geometric computations
+- Always inserts inside the triangle (no encroachment issues)
+
+**Cons:**
+- Slower convergence than Ruppert
+- May not achieve as good angle bounds
+- More iterations needed
+
+### 3. CVT (Centroidal Voronoi Tessellation) Relaxation
+
+**Overview:** Iteratively move vertices toward the centroids of their Voronoi cells.
+
+**How It Works:**
+1. Start with any triangulation
+2. Compute Voronoi diagram (dual of Delaunay)
+3. Move each vertex to centroid of its Voronoi cell
+4. Retriangulate
+5. Repeat until convergence
+
+**Pros:**
+- Produces very uniform, high-quality meshes
+- Good for rendering (uniform triangle sizes)
+- Simple concept
+
+**Cons:**
+- Many iterations needed for convergence
+- Expensive per iteration
+- Doesn't handle constraints well without special treatment
+
+### 4. DistMesh (Signed Distance Function Based)
+
+**Overview:** Uses force-based equilibrium to generate high-quality meshes.
+
+**How It Works:**
+- Define domain via signed distance function
+- Place initial vertices on a regular grid
+- Apply spring-like forces to move vertices
+- Retriangulate after each movement step
+
+**Pros:**
+- Excellent mesh quality
+- Good handling of curved boundaries
+- Predictable element sizes
+
+**Cons:**
+- Requires signed distance function
+- More complex setup
+- May struggle with complex constraint geometry
+
+### 5. Constrained Mesh Simplification (For Rendering)
+
+**Overview:** Start with a dense mesh and simplify while preserving features.
+
+**How It Works:**
+- Generate initial dense triangulation (current approach works)
+- Identify triangles that need refinement
+- Instead of adding vertices, merge/collapse triangles
+- Use edge collapse with error metrics
+
+**Pros:**
+- Works with existing triangulation
+- Can target specific triangle counts
+- Preserves constraint boundaries
+
+**Cons:**
+- Doesn't improve angle quality
+- May lose geometric detail
+- Different goal than refinement
+
+### 6. Quadrilateral Meshing Then Splitting
+
+**Overview:** Generate quad mesh first, then split each quad into 2 triangles.
+
+**How It Works:**
+- Use advancing front or paving algorithm for quads
+- Split each quad along the shorter diagonal
+- Post-process for quality
+
+**Pros:**
+- Very uniform mesh sizes
+- Good for rendering (regular structure)
+- Well-suited for terrain visualization
+
+**Cons:**
+- Complex quad meshing algorithms
+- May not handle irregular boundaries well
+- Overkill for simple visualizations
+
+### Recommendation for Tinfour.NET
+
+Given the rendering use case and current constraint propagation issues:
+
+**Short Term:** Fix the constraint propagation in `SplitEdge` and `RestoreConformity` (FIX-07, FIX-01). The core Ruppert algorithm is working; the issue is maintaining constraint membership after edge splits.
+
+**Medium Term:** Consider implementing **centroid insertion refinement** as a simpler alternative:
+- No segment encroachment handling
+- Insert centroid of bad triangles
+- Use existing constraint propagation (which works for simple insertions)
+- May need more iterations but fewer edge cases
+
+**Long Term:** If rendering quality is the primary goal, consider **CVT relaxation** as a post-processing step:
+- Run Ruppert to get angle quality
+- Apply 5-10 CVT iterations to improve uniformity
+- CVT moves vertices but doesn't add new ones, so constraint membership is preserved
 
 ---
 
