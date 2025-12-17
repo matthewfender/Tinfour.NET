@@ -258,6 +258,14 @@ public interface IQuadEdge
     double GetLength();
 
     /// <summary>
+    ///     Gets the squared length of the edge.
+    ///     This is more efficient than GetLength() when comparing distances
+    ///     since it avoids the square root computation.
+    /// </summary>
+    /// <returns>A positive floating point value</returns>
+    double GetLengthSquared();
+
+    /// <summary>
     ///     Gets an instance of an iterable that performs a pinwheel operation.
     /// </summary>
     /// <remarks>

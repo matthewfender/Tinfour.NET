@@ -47,8 +47,9 @@ public class QuadEdgePartner : QuadEdge
     /// <param name="primary">The primary QuadEdge for which this instance will be the dual.</param>
     public QuadEdgePartner(QuadEdge primary)
     {
-        // Set this partner's index to be one greater than the primary edge's index
-        _index = primary._index + 1;
+        // The partner's _index field is used purely for constraint storage
+        // The sequential index is derived from the dual's index via GetIndex()
+        _index = 0;
         _dual = primary;
     }
 
@@ -87,13 +88,13 @@ public class QuadEdgePartner : QuadEdge
     /// <returns>A positive integer or -1 if no constraint is specified.</returns>
     public override int GetConstraintBorderIndex()
     {
-        if ((_index & ConstraintRegionBorderFlag) != 0)
+        if ((_index & ConstraintRegionBorderFlag) == 0)
         {
-            var c = _index & ConstraintLowerIndexMask;
-            if (c != 0) return c - 1;
+            return -1;
         }
 
-        return -1;
+        // Border index is stored in upper bits - shift right then mask
+        return ((_index >> ConstraintIndexBitSize) & ConstraintLowerIndexMask) - 1;
     }
 
     /// <summary>
@@ -146,10 +147,15 @@ public class QuadEdgePartner : QuadEdge
         return -1;
     }
 
-    // our index can become adulterated with constraint flags. To keep it clean for clients we simply return base + 1
+    /// <summary>
+    ///     Gets the index of this edge. For partner edges, the index is
+    ///     computed as the base edge's index plus one. The partner's own
+    ///     _index field is used purely for constraint storage.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override int GetIndex()
     {
-        return _dual.GetIndex() + 1;
+        return _dual._index + 1;
     }
 
     public override int GetSide()
@@ -327,6 +333,12 @@ public class QuadEdgePartner : QuadEdge
         {
             _index &= ~ConstraintLowerIndexMask;
             _index &= ~ConstraintRegionInteriorFlag;
+            return;
+        }
+
+        // Border edges take precedence - don't overwrite them with interior status
+        if (IsConstraintRegionBorder())
+        {
             return;
         }
 

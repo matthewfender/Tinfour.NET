@@ -173,7 +173,7 @@
                             </Border>
 
                             <!-- Contour Controls -->
-                            <Border Classes="ControlGroup" BorderThickness="0">
+                            <Border Classes="ControlGroup">
                                 <StackPanel Orientation="Vertical" Spacing="4">
                                     <TextBlock Text="Contours" Classes="Header" />
                                     <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,5">
@@ -185,6 +185,21 @@
                                         <Button Content="Generate Contours" Command="{Binding GenerateContoursCommand}" IsEnabled="{Binding !IsGenerating}" />
                                         <Button Content="Clear" Command="{Binding ClearContoursCommand}" />
                                     </StackPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Ruppert Refinement Controls -->
+                            <Border Classes="ControlGroup" BorderThickness="0">
+                                <StackPanel Orientation="Vertical" Spacing="4">
+                                    <TextBlock Text="Ruppert Mesh Refinement" Classes="Header" />
+                                    <TextBlock Text="Refines constrained regions to improve triangle quality" FontSize="10" Foreground="#909090" Margin="0,0,0,5" TextWrapping="Wrap" />
+                                    <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,5">
+                                        <TextBlock Grid.Column="0" Text="Min Angle:" VerticalAlignment="Center" />
+                                        <Slider Grid.Column="1" Value="{Binding RuppertMinAngle}" Minimum="10" Maximum="33" TickFrequency="1" IsSnapToTickEnabled="True" Margin="5,0" />
+                                        <TextBlock Grid.Column="2" Text="{Binding RuppertMinAngle, StringFormat='{}{0:F0}°'}" Width="30" VerticalAlignment="Center" />
+                                    </Grid>
+                                    <Button Content="Apply Ruppert Refinement" Command="{Binding ApplyRuppertRefinementCommand}" IsEnabled="{Binding CanApplyRuppert}" />
+                                    <TextBlock Text="Requires constraints to be added first" FontSize="10" Foreground="Orange" Margin="5,2,0,0" IsVisible="{Binding !CanApplyRuppert}" />
                                 </StackPanel>
                             </Border>
                         </StackPanel>

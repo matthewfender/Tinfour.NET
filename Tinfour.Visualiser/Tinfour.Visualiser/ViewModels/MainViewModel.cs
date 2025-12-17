@@ -36,6 +36,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
 using Tinfour.Core.Common;
+using Tinfour.Core.Refinement;
 using Tinfour.Core.Standard;
 using Tinfour.Visualiser.Services;
 
@@ -149,6 +150,12 @@ public partial class MainViewModel : ViewModelBase
 
     [ObservableProperty]
     private VoronoiResult? _voronoiResult;
+
+    [ObservableProperty]
+    private double _ruppertMinAngle = 20.0;
+
+    [ObservableProperty]
+    private bool _canApplyRuppert;
 
     public MainViewModel()
     {
@@ -402,6 +409,84 @@ public partial class MainViewModel : ViewModelBase
         catch (Exception ex)
         {
             this.StatusText = $"❌ Voronoi generation failed: {ex.Message}";
+        }
+        finally
+        {
+            this.IsGenerating = false;
+        }
+    }
+
+    [RelayCommand]
+    private async Task ApplyRuppertRefinement()
+    {
+        if (this.Triangulation == null || !this.Triangulation.IsBootstrapped())
+        {
+            this.StatusText = "❌ Error: You must first create or load a triangulation before applying Ruppert refinement.";
+            return;
+        }
+
+        if (this.Triangulation.GetConstraints().Count == 0)
+        {
+            this.StatusText = "❌ Error: Ruppert refinement requires constraints. Add constraints first.";
+            return;
+        }
+
+        try
+        {
+            this.IsGenerating = true;
+            var initialVertexCount = this.Triangulation.GetVertices().Count;
+            var initialTriangleCount = this.Triangulation.CountTriangles().ValidTriangles;
+            this.StatusText = $"Applying Ruppert refinement (min angle: {this.RuppertMinAngle}°)...";
+
+            var sw = Stopwatch.StartNew();
+            var verticesAdded = 0;
+            var refinementComplete = false;
+
+            await Task.Run(() =>
+            {
+                var options = new RuppertOptions
+                {
+                    MinimumAngleDegrees = this.RuppertMinAngle,
+                    MaxIterations = 100_000
+                };
+
+                var refiner = new RuppertRefiner(this.Triangulation, options);
+                refinementComplete = refiner.Refine();
+                verticesAdded = this.Triangulation.GetVertices().Count - initialVertexCount;
+            });
+
+            sw.Stop();
+
+            var finalTriangleCount = this.Triangulation.CountTriangles().ValidTriangles;
+
+            // Force UI update by setting to null then back to the TIN
+            var tin = this.Triangulation;
+            this.Triangulation = null;
+            this.Triangulation = tin;
+
+            // Update triangulation result
+            this.TriangulationResult = new TriangulationResult
+            {
+                Tin = tin,
+                VertexCount = tin.GetVertices().Count,
+                EdgeCount = tin.GetEdges().Count,
+                TriangleCount = tin.CountTriangles(),
+                GenerationTime = sw.Elapsed,
+                Bounds = tin.GetBounds()
+            };
+
+            // Request reset view to ensure proper display
+            MessageBus.RequestResetView();
+
+            var statusMessage = refinementComplete ? "✅ Ruppert Refinement Complete" : "⚠️ Ruppert Refinement Hit Iteration Limit";
+            this.StatusText = $"{statusMessage}\n" +
+                             $"Vertices added: {verticesAdded:N0}\n" +
+                             $"Triangles: {initialTriangleCount:N0} → {finalTriangleCount:N0}\n" +
+                             $"Time: {sw.ElapsedMilliseconds:N0}ms";
+        }
+        catch (Exception ex)
+        {
+            this.StatusText = $"❌ Ruppert refinement failed: {ex.Message}";
         }
         finally
         {
@@ -670,6 +755,7 @@ public partial class MainViewModel : ViewModelBase
         this.CanGenerateContours = value?.Tin != null && value.Tin.IsBootstrapped();
         this.CanGenerateInterpolation = value?.Tin != null && value.Tin.IsBootstrapped();
         this.CanGenerateVoronoi = value?.Tin != null && CanGenerateVoronoi(value.Tin);
+        this.CanApplyRuppert = value?.Tin != null && value.Tin.IsBootstrapped() && value.Tin.GetConstraints().Count > 0;
 
         // Clear dependent results when triangulation changes
         this.ContourResult = null;

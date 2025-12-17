@@ -273,6 +273,21 @@ public class QuadEdge : IQuadEdge
     }
 
     /// <summary>
+    ///     Gets the squared length of the edge.
+    ///     This is more efficient than GetLength() when comparing distances
+    ///     since it avoids the square root computation.
+    /// </summary>
+    /// <returns>A positive floating point value</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public double GetLengthSquared()
+    {
+        var a = _v;
+        var b = GetB();
+        if (a.IsNullVertex() || b.IsNullVertex()) return double.PositiveInfinity;
+        return a.GetDistanceSq(b.X, b.Y);
+    }
+
+    /// <summary>
     ///     Gets an instance of an iterable that performs a pinwheel operation.
     /// </summary>
     /// <returns>A valid enumerable collection.</returns>

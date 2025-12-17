@@ -490,17 +490,11 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
         ArgumentNullException.ThrowIfNull(e);
         ArgumentNullException.ThrowIfNull(m);
 
-        Debug.WriteLine(
-            $"SplitEdge: Splitting edge {e.GetIndex()} ({e.GetA().GetIndex()}->{e.GetB().GetIndex()}) at vertex {m.GetIndex()}");
-
         // Get references to key edges
         var b = (QuadEdge)e.GetBaseReference();
         var d = (QuadEdge)e.GetDual();
         var eR = (QuadEdge)e.GetReverse();
         var dF = (QuadEdge)d.GetForward();
-
-        Debug.WriteLine(
-            $"SplitEdge: Base edge: {b.GetIndex()}, Dual: {d.GetIndex()}, Reverse: {eR.GetIndex()}, DualForward: {dF.GetIndex()}");
 
         // Save the original starting vertex
         var a = e.GetA();
@@ -512,45 +506,44 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
         var p = (QuadEdge)AllocateEdge(a, m);
         var q = (QuadEdge)p.GetDual();
 
-        Debug.WriteLine(
-            $"SplitEdge: Created new edge p={p.GetIndex()} ({a.GetIndex()}->{m.GetIndex()}) and dual q={q.GetIndex()}");
-
-        // Fix #2: Establish proper forward/reverse links
-        Debug.WriteLine("SplitEdge: Setting forward/reverse links");
-        Debug.WriteLine("  p.Forward = e, p.Reverse = eR");
+        // Establish proper forward/reverse links
         p.SetForward(e);
         p.SetReverse(eR);
 
-        Debug.WriteLine("  q.Forward = dF, q.Reverse = d");
         q.SetForward(dF);
         q.SetReverse(d);
 
-        Debug.WriteLine("  eR.Forward = p, dF.Reverse = q");
         eR.SetForward(p);
         dF.SetReverse(q);
 
         p._dual._index = b._dual._index;
 
-        // Handle region border constraints if present
+        // Handle region border constraints if present.
+        // When splitting a partner edge (odd index), we need to explicitly set border indices
+        // on both the new edge and its dual to ensure proper constraint propagation.
         if ((e.GetIndex() & 1) != 0 && e.IsConstraintRegionBorder())
         {
-            Debug.WriteLine("SplitEdge: Copying constraint border indices");
             p.SetConstraintBorderIndex(e.GetConstraintBorderIndex());
             q.SetConstraintBorderIndex(b.GetConstraintBorderIndex());
+        }
+        else if (e.IsConstraintRegionBorder())
+        {
+            // For base edges that are border edges, explicitly set the border index
+            // to ensure it's correct on the new edge. The copy above preserves flags
+            // but this ensures the border index is properly set.
+            var borderIdx = e.GetConstraintBorderIndex();
+            if (borderIdx >= 0)
+            {
+                p.SetConstraintBorderIndex(borderIdx);
+            }
         }
 
         // Handle line constraints if present
         if (e.IsConstraintLineMember())
         {
-            Debug.WriteLine("SplitEdge: Handling line constraint");
             if (_linearConstraintMap.TryGetValue(e.GetIndex(), out var constraint))
                 AddLinearConstraintToMap(p, constraint);
         }
-
-        Debug.WriteLine($"SplitEdge: Split complete. New edge p={p.GetIndex()}, modified edge e={e.GetIndex()}");
-
-        // Validate triangle forward linkage after split
-        ValidateConnections(p, e, eR, q, d, dF, "after split");
 
         return p;
     }
@@ -644,21 +637,4 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
         if (_isDisposed) throw new ObjectDisposedException(nameof(EdgePool));
     }
 
-    private void ValidateConnections(
-        QuadEdge p,
-        QuadEdge e,
-        QuadEdge eR,
-        QuadEdge q,
-        QuadEdge d,
-        QuadEdge dF,
-        string context)
-    {
-        Debug.WriteLine($"Connection validation {context}:");
-        Debug.WriteLine($"  p.Forward = {p.GetForward().GetIndex()}, should be {e.GetIndex()}");
-        Debug.WriteLine($"  p.Reverse = {p.GetReverse().GetIndex()}, should be {eR.GetIndex()}");
-        Debug.WriteLine($"  q.Forward = {q.GetForward().GetIndex()}, should be {dF.GetIndex()}");
-        Debug.WriteLine($"  q.Reverse = {q.GetReverse().GetIndex()}, should be {d.GetIndex()}");
-        Debug.WriteLine($"  eR.Forward = {eR.GetForward().GetIndex()}, should be {p.GetIndex()}");
-        Debug.WriteLine($"  dF.Reverse = {dF.GetReverse().GetIndex()}, should be {q.GetIndex()}");
-    }
 }

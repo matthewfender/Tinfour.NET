@@ -88,18 +88,28 @@ public class SimpleTriangleIterator : IEnumerable<SimpleTriangle>
                 nextEdge = null;
 
             // Check if this edge forms a triangle that hasn't been visited
-            if (!visited[eIndex])
+            if (eIndex >= 0 && eIndex < maxIndex && !visited[eIndex])
             {
                 var ef = e.GetForward();
-                var er = ef.GetForward(); // Follow Java pattern: ef.GetForward() should be the reverse of e
+                if (ef == null) continue;
+
+                var er = ef.GetForward();
+                if (er == null) continue;
 
                 // Critical: Validate this forms a proper triangle
                 if (er.GetForward() == e)
                 {
+                    var efIndex = ef.GetIndex();
+                    var erIndex = er.GetIndex();
+
+                    // Bounds check before accessing visited array
+                    if (efIndex < 0 || efIndex >= maxIndex || erIndex < 0 || erIndex >= maxIndex)
+                        continue;
+
                     // Mark all edges as visited
                     visited[eIndex] = true;
-                    visited[ef.GetIndex()] = true;
-                    visited[er.GetIndex()] = true;
+                    visited[efIndex] = true;
+                    visited[erIndex] = true;
 
                     // Check for ghost triangles (vertices should not be null)
                     var a = e.GetA();

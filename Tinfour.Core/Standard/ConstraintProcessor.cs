@@ -57,6 +57,17 @@ public class ConstraintProcessor
         if (edgesForConstraint.Count == 0) return;
         var constraintIndex = constraint.GetConstraintIndex();
 
+        // For hole constraints, we do NOT flood fill the interior.
+        // The outer polygon's flood fill will mark the donut area as interior,
+        // and the hole's border edges will stop that fill from entering the hole.
+        // The hole just needs its border edges marked (which is done by SetConstrained).
+        if (constraint is PolygonConstraint poly && poly.IsHole())
+        {
+            Debug.WriteLine(
+                $"FloodFillConstrainedRegion: Skipping flood fill for hole constraint index {constraintIndex}");
+            return;
+        }
+
         Debug.WriteLine(
             $"FloodFillConstrainedRegion: Starting for constraint index {constraintIndex} with {edgesForConstraint.Count} border edges");
 
@@ -79,15 +90,43 @@ public class ConstraintProcessor
         var v0 = cvList[0];
         double x0 = v0.X, y0 = v0.Y;
 
+        // Debug logging disabled - was causing file locking issues in parallel tests
+        // void Log(string msg) => System.IO.File.AppendAllText("c:/temp/constraint_debug.txt", msg + "\n");
+        void Log(string msg) { }
+
         searchEdge ??= _edgePool.GetStartingEdge();
-        if (searchEdge == null) return null;
+        if (searchEdge == null)
+        {
+            Log("ProcessConstraint: No starting edge available!");
+            return null;
+        }
 
         searchEdge = _walker.FindAnEdgeFromEnclosingTriangle(searchEdge, x0, y0);
+        Log($"ProcessConstraint: Found enclosing triangle edge {searchEdge.GetIndex()}");
+        Log($"  Edge A=({searchEdge.GetA().X},{searchEdge.GetA().Y}), B=({searchEdge.GetB().X},{searchEdge.GetB().Y})");
 
         QuadEdge e0;
-        if (IsMatchingVertex(v0, searchEdge.GetA())) e0 = (QuadEdge)searchEdge;
-        else if (IsMatchingVertex(v0, searchEdge.GetB())) e0 = (QuadEdge)searchEdge.GetDual();
-        else e0 = (QuadEdge)searchEdge.GetReverse();
+        var edgeA = searchEdge.GetA();
+        var edgeB = searchEdge.GetB();
+        var edgeC = searchEdge.GetForward().GetB();
+        Log($"  Triangle vertices: A=({edgeA.X},{edgeA.Y}), B=({edgeB.X},{edgeB.Y}), C=({edgeC.X},{edgeC.Y})");
+        Log($"  Looking for v0=({v0.X},{v0.Y})");
+
+        var matchA = IsMatchingVertex(v0, edgeA);
+        var matchB = IsMatchingVertex(v0, edgeB);
+        var matchC = IsMatchingVertex(v0, edgeC);
+        Log($"  MatchA={matchA}, MatchB={matchB}, MatchC={matchC}");
+
+        if (matchA) e0 = (QuadEdge)searchEdge;
+        else if (matchB) e0 = (QuadEdge)searchEdge.GetDual();
+        else if (matchC) e0 = (QuadEdge)searchEdge.GetReverse();
+        else
+        {
+            Log($"  ERROR: v0 not found in enclosing triangle! Taking GetReverse() anyway.");
+            e0 = (QuadEdge)searchEdge.GetReverse();
+        }
+
+        Log($"  e0 set to edge {e0.GetIndex()}, e0.GetA()=({e0.GetA().X},{e0.GetA().Y})");
 
         // Replace constraint vertices with TIN vertices using Java algorithm
         var a = e0.GetA();
@@ -105,6 +144,9 @@ public class ConstraintProcessor
             v0 = cvList[iSegment];
             var v1 = cvList[iSegment + 1];
 
+            Log($"Segment {iSegment}: v0=({v0.X},{v0.Y}) -> v1=({v1.X},{v1.Y})");
+            Log($"  e0 before segment: {e0.GetIndex()}, e0.GetA()=({e0.GetA().X},{e0.GetA().Y})");
+
             Debug.WriteLine(
                 $"ProcessConstraint: Processing segment {iSegment}/{nSegments - 1}: ({v0.X:F2},{v0.Y:F2}) -> ({v1.X:F2},{v1.Y:F2})");
             Debug.WriteLine($"ProcessConstraint: v0 index={v0.GetIndex()}, v1 index={v1.GetIndex()}");
@@ -121,6 +163,8 @@ public class ConstraintProcessor
             do
             {
                 var b = e.GetB();
+                var bCoords = b.IsNullVertex() ? "NULL" : $"({b.X},{b.Y})";
+                Log($"  Pinwheel step {pinwheelStep}: edge {e.GetIndex()}, B={bCoords}");
                 Debug.WriteLine(
                     $"ProcessConstraint: Pinwheel step {pinwheelStep}: edge {e.GetIndex()} -> vertex {(b.IsNullVertex() ? "NULL" : b.GetIndex().ToString())}({(b.IsNullVertex() ? "ghost" : $"{b.X:F1},{b.Y:F1}")})");
 
@@ -133,11 +177,13 @@ public class ConstraintProcessor
                 {
                     // Check if this edge connects v0 to v1 using Java algorithm
                     var directMatch = b.Equals(v1); // ReferenceEquals(b, v1);
+                    Log($"    Testing B=({b.X},{b.Y}) vs v1=({v1.X},{v1.Y}): Equals={directMatch}");
                     Debug.WriteLine(
                         $"ProcessConstraint: Testing vertex {b.GetIndex()} against target {v1.GetIndex()}: Equals = {directMatch}");
 
                     if (directMatch)
                     {
+                        Log($"    MATCH FOUND! Marking edge {e.GetIndex()} as constrained");
                         Debug.WriteLine(
                             $"ProcessConstraint: Found existing edge for segment {iSegment} (direct match) - marking edge {e.GetIndex()} as constrained");
                         SetConstrained(e, constraint, edgesForConstraint);
@@ -148,6 +194,7 @@ public class ConstraintProcessor
 
                     if (b is VertexMergerGroup bGroup && bGroup.Contains(v1.AsVertex()))
                     {
+                        Log($"    MERGER GROUP MATCH! Marking edge {e.GetIndex()} as constrained");
                         Debug.WriteLine(
                             $"ProcessConstraint: Found existing edge for segment {iSegment} (merger group match)");
                         cvList[iSegment + 1] = b;
@@ -527,22 +574,38 @@ public class ConstraintProcessor
             var f = e.GetForward();
             var fIndex = f.GetIndex();
 
-            if (!f.IsConstraintRegionBorder() && !visited[fIndex])
+            if (!visited[fIndex])
             {
                 visited[fIndex] = true;
-                f.SetConstraintRegionInteriorIndex(constraintIndex);
-                deque.Enqueue(f.GetDual());
+                if (f.IsConstraintRegionBorder())
+                {
+                    // Border edges keep their border status but also get the constraint index set
+                    f.SetConstraintBorderIndex(constraintIndex);
+                }
+                else
+                {
+                    f.SetConstraintRegionInteriorIndex(constraintIndex);
+                    deque.Enqueue(f.GetDual());
+                }
                 continue;
             }
 
             var r = e.GetReverse();
             var rIndex = r.GetIndex();
 
-            if (!r.IsConstraintRegionBorder() && !visited[rIndex])
+            if (!visited[rIndex])
             {
                 visited[rIndex] = true;
-                r.SetConstraintRegionInteriorIndex(constraintIndex);
-                deque.Enqueue(r.GetDual());
+                if (r.IsConstraintRegionBorder())
+                {
+                    // Border edges keep their border status but also get the constraint index set
+                    r.SetConstraintBorderIndex(constraintIndex);
+                }
+                else
+                {
+                    r.SetConstraintRegionInteriorIndex(constraintIndex);
+                    deque.Enqueue(r.GetDual());
+                }
                 continue;
             }
 
@@ -590,17 +653,31 @@ public class ConstraintProcessor
 
     private bool IsMatchingVertex(IVertex v, IVertex fromTin)
     {
-        if (fromTin?.IsNullVertex() == true) return false;
+        if (fromTin?.IsNullVertex() == true)
+        {
+            Debug.WriteLine($"IsMatchingVertex: fromTin is null vertex, returning false");
+            return false;
+        }
 
         // Direct equality check (most common case)
-        if (ReferenceEquals(v, fromTin)) return true;
+        if (ReferenceEquals(v, fromTin))
+        {
+            Debug.WriteLine($"IsMatchingVertex: ReferenceEquals match for ({v.X},{v.Y})");
+            return true;
+        }
 
         // Check for vertex merger group containment
-        if (fromTin is VertexMergerGroup group && group.Contains(v.AsVertex())) return true;
+        if (fromTin is VertexMergerGroup group && group.Contains(v.AsVertex()))
+        {
+            Debug.WriteLine($"IsMatchingVertex: VertexMergerGroup match for ({v.X},{v.Y})");
+            return true;
+        }
 
         // Use simple equality comparison like Java
         // note we are only comparing X/Y coords, not index or Z value
-        return v.Equals(fromTin);
+        var result = v.Equals(fromTin);
+        Debug.WriteLine($"IsMatchingVertex: Equals({v.X},{v.Y}) vs ({fromTin?.X},{fromTin?.Y}) = {result}");
+        return result;
     }
 
     private bool RecursiveRestoreDelaunay(QuadEdge n)
@@ -718,8 +795,6 @@ public class ConstraintProcessor
         var dual = (QuadEdge)edge.GetDual();
         var idx = constraint.GetConstraintIndex();
 
-        Debug.WriteLine($"SetConstrained: Marking edge {edge.GetIndex()} as constrained with index {idx}");
-
         if (constraint.DefinesConstrainedRegion())
         {
             // Store edge reference for flood fill and mark both sides
@@ -727,7 +802,6 @@ public class ConstraintProcessor
 
             // For region constraints, call the interface methods which will delegate to the duals
             edge.SetConstraintBorderIndex(idx);
-            Debug.WriteLine($"SetConstrained: Marked region border on edges {edge.GetIndex()} and {dual.GetIndex()}");
         }
         else
         {

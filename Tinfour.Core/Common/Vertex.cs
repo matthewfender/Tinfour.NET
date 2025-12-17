@@ -37,13 +37,14 @@ using System.Runtime.CompilerServices;
 ///     Represents a point in a connected network on a planar surface.
 /// </summary>
 /// <remarks>
-///     This struct is intentionally implemented with memory efficiency in mind.
+///     TEMPORARY: Changed from struct to class to test reference equality issues.
+///     Original comment: This struct is intentionally implemented with memory efficiency in mind.
 ///     Using a struct rather than a class eliminates the overhead of heap allocation,
 ///     and by carefully selecting data types, we minimize the memory footprint.
 ///     For compatibility with the Java version which used nullable vertices,
 ///     we provide a special NullVertex constant to represent ghost vertices.
 /// </remarks>
-public readonly struct Vertex : IVertex
+public sealed class Vertex : IVertex
 {
     /// <summary>
     ///     A bit flag indicating that the vertex is synthetic and was created
@@ -96,46 +97,46 @@ public readonly struct Vertex : IVertex
     /// <summary>
     ///     The Cartesian X coordinate of the vertex (immutable).
     /// </summary>
-    public readonly double X { get; }
+    public double X { get; }
 
     /// <summary>
     ///     The Cartesian Y coordinate of the vertex (immutable).
     /// </summary>
-    public readonly double Y { get; }
+    public double Y { get; }
 
     /// <summary>
     ///     The Z coordinate of the vertex (immutable); treated as a dependent
     ///     variable of (X,Y).
     /// </summary>
-    private readonly float _z;
+    private float _z;
 
     /// <summary>
     ///     An indexing value assigned to the Vertex. Used primarily for
     ///     diagnostic purposes and labeling graphics.
     /// </summary>
-    private readonly int _index;
+    private int _index;
 
     /// <summary>
     ///     The bit-mapped status flags for the vertex. The assignment of meaning
     ///     to the bits for this field are defined by static members of this class.
     /// </summary>
-    private readonly byte _status;
+    private byte _status;
 
     /// <summary>
     ///     An unused field reserved for use by applications and derived types
     /// </summary>
-    private readonly byte _reserved0;
+    private byte _reserved0;
 
     /// <summary>
     ///     An unused field reserved for use by applications and derived types
     /// </summary>
-    private readonly byte _reserved1;
+    private byte _reserved1;
 
     /// <summary>
     ///     The auxiliary index used for graph coloring algorithms
     ///     and other applications.
     /// </summary>
-    private readonly byte _auxiliary;
+    private byte _auxiliary;
 
     /// <summary>
     ///     Constructs a vertex with the specified coordinates and z value.
@@ -446,15 +447,25 @@ public readonly struct Vertex : IVertex
     }
 
     /// <summary>
-    ///     Equality operator that properly handles null vertices.
+    ///     Equality operator that properly handles null vertices and C# null references.
     /// </summary>
-    public static bool operator ==(Vertex left, Vertex right)
+    public static bool operator ==(Vertex? left, Vertex? right)
     {
+        // Handle C# null references first (needed since Vertex is now a class)
+        var leftIsNull = ReferenceEquals(left, null);
+        var rightIsNull = ReferenceEquals(right, null);
+
+        if (leftIsNull && rightIsNull)
+            return true;
+        if (leftIsNull || rightIsNull)
+            return false;
+
+        // Now handle NullVertex (ghost vertex) semantics
         // If both are null vertices, they're equal
         if (left.IsNullVertex() && right.IsNullVertex())
             return true;
 
-        // If one is null and the other isn't, they're not equal
+        // If one is null vertex and the other isn't, they're not equal
         if (left.IsNullVertex() || right.IsNullVertex())
             return false;
 
@@ -465,7 +476,7 @@ public readonly struct Vertex : IVertex
     /// <summary>
     ///     Inequality operator.
     /// </summary>
-    public static bool operator !=(Vertex left, Vertex right)
+    public static bool operator !=(Vertex? left, Vertex? right)
     {
         return !(left == right);
     }

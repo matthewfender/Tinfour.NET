@@ -80,7 +80,7 @@ public class Circumcircle
             return circle;
         }
 
-        circle.Compute(a.Value.X, a.Value.Y, b.Value.X, b.Value.Y, c.Value.X, c.Value.Y);
+        circle.Compute(a.X, a.Y, b.X, b.Y, c.X, c.Y);
         return circle;
     }
 
