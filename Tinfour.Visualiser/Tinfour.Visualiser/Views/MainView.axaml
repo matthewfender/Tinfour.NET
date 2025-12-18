@@ -198,6 +198,14 @@
                                         <Slider Grid.Column="1" Value="{Binding RuppertMinAngle}" Minimum="10" Maximum="33" TickFrequency="1" IsSnapToTickEnabled="True" Margin="5,0" />
                                         <TextBlock Grid.Column="2" Text="{Binding RuppertMinAngle, StringFormat='{}{0:F0}°'}" Width="30" VerticalAlignment="Center" />
                                     </Grid>
+                                    <TextBlock Text="Z Interpolation:" Margin="0,0,0,2" />
+                                    <ComboBox SelectedItem="{Binding SelectedInterpolationType}" ItemsSource="{Binding AvailableInterpolationTypes}" Margin="0,0,0,5">
+                                        <ComboBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding Converter={StaticResource InterpolationTypeConverter}}" />
+                                            </DataTemplate>
+                                        </ComboBox.ItemTemplate>
+                                    </ComboBox>
                                     <Button Content="Apply Ruppert Refinement" Command="{Binding ApplyRuppertRefinementCommand}" IsEnabled="{Binding CanApplyRuppert}" />
                                     <TextBlock Text="Requires constraints to be added first" FontSize="10" Foreground="Orange" Margin="5,2,0,0" IsVisible="{Binding !CanApplyRuppert}" />
                                 </StackPanel>

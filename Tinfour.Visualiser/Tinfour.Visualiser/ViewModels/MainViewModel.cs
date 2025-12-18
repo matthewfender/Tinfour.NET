@@ -448,7 +448,8 @@ public partial class MainViewModel : ViewModelBase
                 {
                     MinimumAngleDegrees = this.RuppertMinAngle,
                     MaxIterations = 100_000,
-                    InterpolateZ = true  // Required for rasterization - interpolates Z values for new vertices
+                    InterpolateZ = true,  // Required for rasterization - interpolates Z values for new vertices
+                    InterpolationType = this.SelectedInterpolationType
                 };
 
                 var refiner = new RuppertRefiner(this.Triangulation, options);

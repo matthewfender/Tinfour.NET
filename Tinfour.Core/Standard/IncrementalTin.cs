@@ -292,7 +292,6 @@ public class IncrementalTin : IIncrementalTin
 
             if (anyRedundant)
             {
-                Debug.WriteLine("Redundant vertice(s)  found");
                 var remapped = new List<IVertex>(c.GetVertices().Count);
                 var prior = Vertex.Null;
                 foreach (var v in c.GetVertices())
@@ -520,13 +519,38 @@ public class IncrementalTin : IIncrementalTin
         {
             if (++iterations > maxIterations)
             {
-                Debug.WriteLine($"ERROR: GetPerimeter() exceeded {maxIterations} iterations - possible infinite loop. Returning partial perimeter with {perimeter.Count} edges.");
-                break;
+#if DEBUG
+                throw new InvalidOperationException($"GetPerimeter() exceeded {maxIterations} iterations - ghost edge topology is corrupted");
+#else
+                return GetPerimeterFallback();
+#endif
             }
             perimeter.Add(s.GetDual());
             s = s.GetForward().GetForward().GetDual().GetReverse();
         }
         while (s != s0);
+
+        return perimeter;
+    }
+
+    /// <summary>
+    ///     Fallback method to get perimeter edges by scanning all edges.
+    ///     Used when the ghost edge traversal fails.
+    /// </summary>
+    private IList<IQuadEdge> GetPerimeterFallback()
+    {
+        var perimeter = new List<IQuadEdge>();
+
+        // Find all edges where one side is a ghost (B vertex is null)
+        // The perimeter edge is the dual of the ghost edge (the interior side)
+        foreach (var edge in _edgePool)
+        {
+            if (edge.GetB().IsNullVertex())
+            {
+                // This is a ghost edge (real -> ghost), add its dual (interior side)
+                perimeter.Add(edge.GetDual());
+            }
+        }
 
         return perimeter;
     }
@@ -643,6 +667,7 @@ public class IncrementalTin : IIncrementalTin
 
     /// <summary>
     ///     Splits an existing edge at the specified parametric position.
+    ///     Uses simple manual wiring - does NOT handle ghost edges on the perimeter.
     /// </summary>
     /// <param name="edge">The edge to split</param>
     /// <param name="t">Parametric position along edge (0.0 to 1.0, typically 0.5 for midpoint)</param>
@@ -693,17 +718,7 @@ public class IncrementalTin : IIncrementalTin
         var c = bc.GetB();
         var d = ad.GetB();
 
-        // When splitting a constraint region member edge, we need to propagate
-        // the constraint to the new interior edges. However, for BORDER edges,
-        // we must be careful: the new interior edges (cm, dm) should only be
-        // marked as interior if they're on the INSIDE of the constraint region.
-        //
-        // For INTERIOR edges (both adjacent triangles are in the same region),
-        // both cm and dm should be marked as interior.
-        //
-        // For BORDER edges, only one side is inside the region. We determine
-        // which side by checking which adjacent triangle is already marked as
-        // a constraint region member.
+        // Determine constraint indices for the new interior edges
         var constraintIndexForC = -1;
         var constraintIndexForD = -1;
 
@@ -711,7 +726,6 @@ public class IncrementalTin : IIncrementalTin
         {
             if (ab.IsConstraintRegionInterior())
             {
-                // Interior edge - both sides are in the same region
                 var con = GetRegionConstraint(ab);
                 if (con != null)
                 {
@@ -719,46 +733,19 @@ public class IncrementalTin : IIncrementalTin
                     constraintIndexForC = idx;
                     constraintIndexForD = idx;
                 }
-                else
-                {
-                    // Fallback: use the interior index directly from the edge
-                    // This handles cases where GetRegionConstraint returns null
-                    var idx = ab.GetConstraintRegionInteriorIndex();
-                    if (idx >= 0)
-                    {
-                        constraintIndexForC = idx;
-                        constraintIndexForD = idx;
-                        Debug.WriteLine($"SplitEdge: GetRegionConstraint returned null, using edge interior index {idx}");
-                    }
-                }
             }
             else if (ab.IsConstraintRegionBorder())
             {
-                // Border edge - one side is inside the constraint region, one is outside.
-                // We need to determine which side is which by checking adjacent edges.
-                //
-                // For a solid polygon border: outside is empty, inside is filled
-                // For a hole border: outside (the donut) is filled, inside (the hole) is empty
-                //
-                // Check if the c-side triangle has interior edges - if so, c-side is inside
+                // Check which side is inside the constraint region
                 if (bc.IsConstraintRegionInterior())
-                {
                     constraintIndexForC = bc.GetConstraintRegionInteriorIndex();
-                }
                 else if (ca.IsConstraintRegionInterior())
-                {
                     constraintIndexForC = ca.GetConstraintRegionInteriorIndex();
-                }
 
-                // Check if the d-side triangle has interior edges - if so, d-side is inside
                 if (ad.IsConstraintRegionInterior())
-                {
                     constraintIndexForD = ad.GetConstraintRegionInteriorIndex();
-                }
                 else if (db.IsConstraintRegionInterior())
-                {
                     constraintIndexForD = db.GetConstraintRegionInteriorIndex();
-                }
             }
         }
 
@@ -767,33 +754,26 @@ public class IncrementalTin : IIncrementalTin
         var borderIndex = wasBorderEdge ? ab.GetConstraintBorderIndex() : -1;
 
         // Split the edge ab by inserting midpoint m
-        // After split: ab becomes (m->b), the new edge am is (a->m)
         var mb = ab;
         var bm = ba;
         var am = (QuadEdge)_edgePool.SplitEdge(ab, m);
         var ma = (QuadEdge)am.GetDual();
 
         // Ensure BOTH halves of a split border edge remain border edges
-        // EdgePool.SplitEdge should handle this, but we verify and fix if needed
         if (wasBorderEdge && borderIndex >= 0)
         {
             if (!am.IsConstraintRegionBorder())
-            {
                 am.SetConstraintBorderIndex(borderIndex);
-            }
             if (!mb.IsConstraintRegionBorder())
-            {
                 mb.SetConstraintBorderIndex(borderIndex);
-            }
         }
 
-        // Create new edges to connect the midpoint to opposite vertices (if they exist)
+        // Wire up the c-side (if not ghost)
         if (!c.IsNullVertex())
         {
             var cm = (QuadEdge)_edgePool.AllocateEdge(c, m);
             var mc = (QuadEdge)cm.GetDual();
 
-            // Wire up the triangulation for the c-side
             mb.SetForward(bc);
             bc.SetForward(cm);
             cm.SetForward(mb);
@@ -802,20 +782,16 @@ public class IncrementalTin : IIncrementalTin
             ca.SetForward(am);
             am.SetForward(mc);
 
-            // Propagate constraint region membership to the new interior edge
-            // Only mark if the c-side triangle is inside a constraint region
             if (constraintIndexForC >= 0)
-            {
                 cm.SetConstraintRegionInteriorIndex(constraintIndexForC);
-            }
         }
 
+        // Wire up the d-side (if not ghost)
         if (!d.IsNullVertex())
         {
             var dm = (QuadEdge)_edgePool.AllocateEdge(d, m);
             var md = (QuadEdge)dm.GetDual();
 
-            // Wire up the triangulation for the d-side
             ma.SetForward(ad);
             ad.SetForward(dm);
             dm.SetForward(ma);
@@ -824,12 +800,8 @@ public class IncrementalTin : IIncrementalTin
             db.SetForward(bm);
             bm.SetForward(md);
 
-            // Propagate constraint region membership to the new interior edge
-            // Only mark if the d-side triangle is inside a constraint region
             if (constraintIndexForD >= 0)
-            {
                 dm.SetConstraintRegionInteriorIndex(constraintIndexForD);
-            }
         }
 
         _vertexCount++;

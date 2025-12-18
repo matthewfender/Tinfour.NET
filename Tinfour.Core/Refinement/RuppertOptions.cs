@@ -32,6 +32,8 @@
 
 namespace Tinfour.Core.Refinement;
 
+using Tinfour.Core.Interpolation;
+
 /// <summary>
 ///     Configuration options for Ruppert's Delaunay refinement algorithm.
 /// </summary>
@@ -140,6 +142,28 @@ public class RuppertOptions
     /// </remarks>
     /// <value><c>true</c> to interpolate Z values; otherwise <c>false</c>. Default is <c>false</c>.</value>
     public bool InterpolateZ { get; set; } = false;
+
+    /// <summary>
+    ///     Gets or sets the interpolation method to use for computing Z values of new vertices.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Only used when <see cref="InterpolateZ"/> is true. Determines which
+    ///         interpolation algorithm is used to compute Z values for newly inserted
+    ///         Steiner points (offcenter and circumcenter insertions).
+    ///     </para>
+    ///     <para>
+    ///         <see cref="Interpolation.InterpolationType.TriangularFacet"/> (default): Fast linear
+    ///         interpolation treating each triangle as a planar facet. Provides C0 continuity.
+    ///     </para>
+    ///     <para>
+    ///         <see cref="Interpolation.InterpolationType.NaturalNeighbor"/>: Sibson's Natural Neighbor
+    ///         interpolation. Slower but provides smoother C1 continuity (except at data vertices).
+    ///         Better for 3D visualization and terrain modeling.
+    ///     </para>
+    /// </remarks>
+    /// <value>The interpolation method. Default is <see cref="Interpolation.InterpolationType.TriangularFacet"/>.</value>
+    public InterpolationType InterpolationType { get; set; } = InterpolationType.TriangularFacet;
 
     /// <summary>
     ///     Gets or sets the maximum number of iterations for the refinement loop.
