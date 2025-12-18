@@ -85,9 +85,11 @@ public class TriangulationGenerator
             }
 
         // Create polygon constraints for the circles
-        var outerCircleConstraint = new PolygonConstraint(outerCircleVertices);
+        // Outer circle is the main constraint region
+        var outerCircleConstraint = new PolygonConstraint(outerCircleVertices, definesRegion: true, isHole: false);
         outerCircleConstraint.SetDefaultZ(0.0); // Set default Z for interpolation
-        var innerCircleConstraint = new PolygonConstraint(innerCircleVertices);
+        // Inner circle is a hole within the outer region
+        var innerCircleConstraint = new PolygonConstraint(innerCircleVertices, definesRegion: true, isHole: true);
         innerCircleConstraint.SetDefaultZ(0.0); // Set default Z for interpolation
 
         // Store all vertices for potential recovery
@@ -727,7 +729,7 @@ public class TriangulationResult
         if (this.Bounds.HasValue)
         {
             var (left, top, width, height) = this.Bounds.Value;
-            stats += $"\nBounds: ({left:F0},{top:F0}) {width:F0}×{height:F0}";
+            stats += $"\nBounds: ({left:F0},{top:F0}) {width:F0}ï¿½{height:F0}";
         }
 
         // Add debug info for small triangulations

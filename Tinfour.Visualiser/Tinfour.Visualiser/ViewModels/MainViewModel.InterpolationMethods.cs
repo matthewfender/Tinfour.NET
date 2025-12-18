@@ -50,6 +50,20 @@ public partial class MainViewModel
 
             var result = await Task.Run(() =>
                 {
+                    // Diagnostic: count constraint interior edges to verify we have the rebuilt TIN
+                    var interiorCount = 0;
+                    var borderCount = 0;
+                    var totalEdges = 0;
+                    foreach (var edge in this.Triangulation.GetEdgeIterator())
+                    {
+                        totalEdges++;
+                        if (edge.IsConstraintRegionInterior()) interiorCount++;
+                        if (edge.IsConstraintRegionBorder()) borderCount++;
+                    }
+                    System.Diagnostics.Debug.WriteLine($"GenerateInterpolation: TIN has {totalEdges} edges, {interiorCount} interior, {borderCount} border");
+                    System.Diagnostics.Debug.WriteLine($"GenerateInterpolation: TIN vertex count = {this.Triangulation.GetVertices().Count}");
+                    System.Diagnostics.Debug.WriteLine($"GenerateInterpolation: ConstrainedInterpolationOnly = {this.ConstrainedInterpolationOnly}");
+
                     // Get TIN bounds
                     var bounds = this.Triangulation.GetBounds();
                     if (!bounds.HasValue) throw new InvalidOperationException("Unable to determine TIN bounds");

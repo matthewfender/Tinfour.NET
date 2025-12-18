@@ -188,10 +188,23 @@ public class TriangularFacetInterpolator : IInterpolatorOverTin
 
         var edge = _navigator.GetNeighborEdge(x, y);
         if (ConstrainedRegionsOnly)
-            if (!edge.IsConstraintRegionMember() || (!edge.IsConstraintRegionInterior()
-                                                     && !edge.GetForward().IsConstraintRegionInterior()
-                                                     && !edge.GetReverse().IsConstraintRegionInterior()))
+        {
+            // Check if ANY edge of the triangle is marked as interior to a constraint region.
+            // A triangle is considered inside a constrained region if at least one of its edges
+            // is marked as interior to that region.
+            //
+            // Note: Border edges alone don't qualify - they touch the boundary but the triangle
+            // might be on the outside. Interior edges mean the triangle is definitely inside.
+            var edgeFwd = edge.GetForward();
+            var edgeRev = edge.GetReverse();
+
+            var isInConstrainedRegion = edge.IsConstraintRegionInterior()
+                                     || edgeFwd.IsConstraintRegionInterior()
+                                     || edgeRev.IsConstraintRegionInterior();
+
+            if (!isInConstrainedRegion)
                 return double.NaN;
+        }
 
         var v0 = edge.GetA();
         var v1 = edge.GetB();

@@ -173,7 +173,7 @@
                             </Border>
 
                             <!-- Contour Controls -->
-                            <Border Classes="ControlGroup" BorderThickness="0">
+                            <Border Classes="ControlGroup">
                                 <StackPanel Orientation="Vertical" Spacing="4">
                                     <TextBlock Text="Contours" Classes="Header" />
                                     <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,5">
@@ -181,10 +181,41 @@
                                         <Slider Grid.Column="1" Value="{Binding ContourLevels}" Minimum="3" Maximum="25" TickFrequency="1" IsSnapToTickEnabled="True" Margin="5,0" />
                                         <TextBlock Grid.Column="2" Text="{Binding ContourLevels}" Width="30" />
                                     </Grid>
+                                    <CheckBox Content="Apply Smoothing Filter" IsChecked="{Binding ApplySmoothingToContours}" Margin="0,5,0,0" />
+                                    <Grid ColumnDefinitions="Auto,*,Auto" Margin="15,0,0,5" IsVisible="{Binding ApplySmoothingToContours}">
+                                        <TextBlock Grid.Column="0" Text="Passes:" VerticalAlignment="Center" />
+                                        <Slider Grid.Column="1" Value="{Binding SmoothingPasses}" Minimum="5" Maximum="40" TickFrequency="5" IsSnapToTickEnabled="True" Margin="5,0" />
+                                        <TextBlock Grid.Column="2" Text="{Binding SmoothingPasses}" Width="30" VerticalAlignment="Center" />
+                                    </Grid>
                                     <StackPanel Orientation="Horizontal" Spacing="5" Margin="0,10,0,0">
                                         <Button Content="Generate Contours" Command="{Binding GenerateContoursCommand}" IsEnabled="{Binding !IsGenerating}" />
                                         <Button Content="Clear" Command="{Binding ClearContoursCommand}" />
                                     </StackPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Ruppert Refinement Controls -->
+                            <Border Classes="ControlGroup" BorderThickness="0">
+                                <StackPanel Orientation="Vertical" Spacing="4">
+                                    <TextBlock Text="Ruppert Mesh Refinement" Classes="Header" />
+                                    <TextBlock Text="Improves triangle quality by eliminating skinny triangles" FontSize="10" Foreground="#909090" Margin="0,0,0,5" TextWrapping="Wrap" />
+                                    <CheckBox Content="Refine only inside constraints" IsChecked="{Binding RefineOnlyInsideConstraints}" Margin="0,0,0,2" ToolTip.Tip="When checked, only triangles inside constraint regions are refined. When unchecked, the entire mesh is refined." />
+                                    <CheckBox Content="Add bounding box constraint" IsChecked="{Binding AddBoundingBoxConstraint}" Margin="0,0,0,5" ToolTip.Tip="Adds a rectangular constraint around the data bounds to prevent mesh expansion during refinement." />
+                                    <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,5">
+                                        <TextBlock Grid.Column="0" Text="Min Angle:" VerticalAlignment="Center" />
+                                        <Slider Grid.Column="1" Value="{Binding RuppertMinAngle}" Minimum="10" Maximum="33" TickFrequency="1" IsSnapToTickEnabled="True" Margin="5,0" />
+                                        <TextBlock Grid.Column="2" Text="{Binding RuppertMinAngle, StringFormat='{}{0:F0}°'}" Width="30" VerticalAlignment="Center" />
+                                    </Grid>
+                                    <TextBlock Text="Z Interpolation:" Margin="0,0,0,2" />
+                                    <ComboBox SelectedItem="{Binding SelectedInterpolationType}" ItemsSource="{Binding AvailableInterpolationTypes}" Margin="0,0,0,5">
+                                        <ComboBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding Converter={StaticResource InterpolationTypeConverter}}" />
+                                            </DataTemplate>
+                                        </ComboBox.ItemTemplate>
+                                    </ComboBox>
+                                    <Button Content="Apply Ruppert Refinement" Command="{Binding ApplyRuppertRefinementCommand}" IsEnabled="{Binding CanApplyRuppert}" />
+                                    <TextBlock Text="Requires constraints when 'Refine only inside constraints' is enabled" FontSize="10" Foreground="Orange" Margin="5,2,0,0" IsVisible="{Binding !CanApplyRuppert}" />
                                 </StackPanel>
                             </Border>
                         </StackPanel>

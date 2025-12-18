@@ -258,6 +258,14 @@ public interface IQuadEdge
     double GetLength();
 
     /// <summary>
+    ///     Gets the squared length of the edge.
+    ///     This is more efficient than GetLength() when comparing distances
+    ///     since it avoids the square root computation.
+    /// </summary>
+    /// <returns>A positive floating point value</returns>
+    double GetLengthSquared();
+
+    /// <summary>
     ///     Gets an instance of an iterable that performs a pinwheel operation.
     /// </summary>
     /// <remarks>
@@ -467,6 +475,13 @@ public interface IQuadEdge
     /// <param name="a">The initial IVertex</param>
     /// <param name="b">The second IVertex</param>
     void SetVertices(IVertex a, IVertex b);
+
+    /// <summary>
+    ///     Clears the constraint region flags (border and interior) from this edge.
+    ///     This is used when an edge is flipped and its constraint status becomes stale.
+    ///     Preserves the ConstraintEdgeFlag (if edge is constrained) and ConstraintLineMemberFlag.
+    /// </summary>
+    void ClearConstraintRegionFlags();
 
     /// <summary>
     ///     Provides a convenience method for rendering edges by setting the

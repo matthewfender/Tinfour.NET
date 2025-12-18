@@ -38,8 +38,9 @@ public class ConstraintFileLoader
     /// </summary>
     /// <param name="tin">The TIN to add the constraints to</param>
     /// <param name="constraints">The constraints to add</param>
+    /// <param name="addBoundingBox">If true, adds 4 corner vertices around the constraints to keep them off the perimeter</param>
     /// <returns>True if the constraints were added successfully; otherwise, false</returns>
-    public static bool AddConstraintsToTin(IncrementalTin tin, IEnumerable<IConstraint> constraints)
+    public static bool AddConstraintsToTin(IncrementalTin tin, IEnumerable<IConstraint> constraints, bool addBoundingBox = true)
     {
         if (tin == null || constraints == null || !tin.IsBootstrapped())
         {
@@ -74,7 +75,14 @@ public class ConstraintFileLoader
                 return false;
             }
 
-            // Validate each constraint has valid coordinates
+            // Validate each constraint has valid coordinates and compute bounding box
+            var minX = double.MaxValue;
+            var minY = double.MaxValue;
+            var maxX = double.MinValue;
+            var maxY = double.MinValue;
+            var minZ = double.MaxValue;
+            var maxZ = double.MinValue;
+
             foreach (var constraint in validConstraints)
             {
                 var vertices = constraint.GetVertices().ToList();
@@ -82,8 +90,43 @@ public class ConstraintFileLoader
                 {
                     var v = vertices[i];
                     if (double.IsNaN(v.X) || double.IsNaN(v.Y) || double.IsInfinity(v.X) || double.IsInfinity(v.Y))
+                    {
                         Debug.WriteLine($"Found invalid coordinates in constraint: ({v.X}, {v.Y})");
+                    }
+                    else
+                    {
+                        minX = Math.Min(minX, v.X);
+                        minY = Math.Min(minY, v.Y);
+                        maxX = Math.Max(maxX, v.X);
+                        maxY = Math.Max(maxY, v.Y);
+                        if (!double.IsNaN(v.GetZ()))
+                        {
+                            minZ = Math.Min(minZ, v.GetZ());
+                            maxZ = Math.Max(maxZ, v.GetZ());
+                        }
+                    }
                 }
+            }
+
+            // Add bounding box vertices to keep constraints off the perimeter
+            // This prevents ghost edge topology issues when splitting constraint edges
+            if (addBoundingBox && minX < maxX && minY < maxY)
+            {
+                var padding = Math.Max(maxX - minX, maxY - minY) * 0.1; // 10% padding
+                var avgZ = (minZ + maxZ) / 2.0;
+                if (double.IsNaN(avgZ) || double.IsInfinity(avgZ))
+                    avgZ = 0.0;
+
+                var cornerVertices = new List<IVertex>
+                {
+                    new Vertex(minX - padding, minY - padding, avgZ, -1),
+                    new Vertex(maxX + padding, minY - padding, avgZ, -2),
+                    new Vertex(maxX + padding, maxY + padding, avgZ, -3),
+                    new Vertex(minX - padding, maxY + padding, avgZ, -4)
+                };
+
+                tin.Add(cornerVertices);
+                Debug.WriteLine($"AddConstraintsToTin: Added 4 bounding box vertices with padding {padding:F2}");
             }
 
             // Add the constraints to the TIN

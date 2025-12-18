@@ -45,4 +45,20 @@ public interface IIncrementalTinNavigator : IProcessUsingTin
     /// <param name="y">The y coordinate for point location</param>
     /// <returns>An edge from the containing triangle or perimeter edge</returns>
     IQuadEdge GetNeighborEdge(double x, double y);
+
+    /// <summary>
+    ///     Finds the triangle that contains the specified coordinates.
+    /// </summary>
+    /// <param name="x">The x coordinate for point location</param>
+    /// <param name="y">The y coordinate for point location</param>
+    /// <returns>The containing triangle, or null if outside the TIN</returns>
+    SimpleTriangle? GetContainingTriangle(double x, double y);
+
+    /// <summary>
+    ///     Finds the vertex nearest to the specified coordinates.
+    /// </summary>
+    /// <param name="x">The x coordinate</param>
+    /// <param name="y">The y coordinate</param>
+    /// <returns>The nearest vertex, or null if the TIN is empty</returns>
+    IVertex? GetNearestVertex(double x, double y);
 }

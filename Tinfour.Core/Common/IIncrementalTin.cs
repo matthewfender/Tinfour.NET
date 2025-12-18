@@ -202,6 +202,27 @@ public interface IIncrementalTin : IDisposable
     void PreAllocateForVertices(int vertexCount);
 
     /// <summary>
+    ///     Splits an existing edge at the specified parametric position.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         This method divides an existing edge at a parametric position t
+    ///         (measured from origin A toward destination B). The inserted vertex
+    ///         inherits the constraint status of the edge; if the input edge is
+    ///         constrained, the new vertex is marked as a constraint vertex.
+    ///     </para>
+    ///     <para>
+    ///         Implementations may clamp t to avoid zero-length subedges.
+    ///         This method is primarily used by mesh refinement algorithms.
+    ///     </para>
+    /// </remarks>
+    /// <param name="edge">The edge to split</param>
+    /// <param name="t">Parametric position along edge (0.0 to 1.0, typically 0.5 for midpoint)</param>
+    /// <param name="z">The Z coordinate for the new vertex</param>
+    /// <returns>The newly created vertex at the split point, or null on failure</returns>
+    IVertex? SplitEdge(IQuadEdge edge, double t, double z);
+
+    /// <summary>
     ///     Releases the lock on a TIN.
     /// </summary>
     void Unlock();

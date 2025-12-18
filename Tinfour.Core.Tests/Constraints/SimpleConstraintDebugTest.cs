@@ -188,11 +188,44 @@ public class SimpleConstraintDebugTest
 
         var constraint = new PolygonConstraint(constraintVertices);
 
+        // Debug: Test vertex equality before processing
+        this._output.WriteLine("\nVertex equality test:");
+        var tinVertex = vertices.First(v => Math.Abs(v.X - 2.0) < 0.01 && Math.Abs(v.Y - 2.0) < 0.01);
+        var constraintVertex = constraintVertices[0];
+        this._output.WriteLine($"  TIN vertex (2,2): type={tinVertex.GetType().Name}, X={tinVertex.X}, Y={tinVertex.Y}");
+        this._output.WriteLine($"  Constraint vertex (2,2): type={constraintVertex.GetType().Name}, X={constraintVertex.X}, Y={constraintVertex.Y}");
+        this._output.WriteLine($"  Equals: {tinVertex.Equals(constraintVertex)}");
+        this._output.WriteLine($"  ReferenceEquals: {ReferenceEquals(tinVertex, constraintVertex)}");
+
+        // Test the actual Vertex == operator
+        if (tinVertex is Tinfour.Core.Common.Vertex tv && constraintVertex is Tinfour.Core.Common.Vertex cv)
+        {
+            this._output.WriteLine($"  Vertex == operator: {tv == cv}");
+        }
+
         // Process constraint and analyze results
         tin.AddConstraints(new[] { constraint }, true);
 
         var constraintIndex = constraint.GetConstraintIndex();
         var allEdges = tin.GetEdges().Where((IQuadEdge e) => !e.GetB().IsNullVertex()).ToList();
+
+        this._output.WriteLine($"\nDebug: constraintIndex={constraintIndex}");
+        this._output.WriteLine($"Debug: Total edges (non-ghost): {allEdges.Count}");
+
+        // Check specific edges that were marked according to the log
+        var markedEdges = new[] { 143, 195, 118, 110 };
+        foreach (var idx in markedEdges)
+        {
+            var edge = allEdges.FirstOrDefault(e => e.GetIndex() == idx);
+            if (edge != null)
+            {
+                this._output.WriteLine($"Debug: Edge {idx}: IsBorder={edge.IsConstraintRegionBorder()}, BorderIdx={edge.GetConstraintBorderIndex()}, IsConstrained={edge.IsConstrained()}");
+            }
+            else
+            {
+                this._output.WriteLine($"Debug: Edge {idx}: NOT FOUND in allEdges");
+            }
+        }
 
         var borderEdges = allEdges.Where((IQuadEdge e) =>
             e.IsConstraintRegionBorder() && e.GetConstraintBorderIndex() == constraintIndex).ToList();

@@ -89,4 +89,72 @@ public class IncrementalTinNavigator : IIncrementalTinNavigator
         _searchEdge = null;
         _walker.Reset();
     }
+
+    /// <summary>
+    ///     Finds the triangle that contains the specified coordinates.
+    /// </summary>
+    /// <param name="x">The x coordinate for point location</param>
+    /// <param name="y">The y coordinate for point location</param>
+    /// <returns>The containing triangle, or null if outside the TIN or ghost triangle</returns>
+    public SimpleTriangle? GetContainingTriangle(double x, double y)
+    {
+        var edge = GetNeighborEdge(x, y);
+        if (edge == null)
+            return null;
+
+        var triangle = new SimpleTriangle(edge);
+        return triangle.IsGhost() ? null : triangle;
+    }
+
+    /// <summary>
+    ///     Finds the vertex nearest to the specified coordinates.
+    /// </summary>
+    /// <param name="x">The x coordinate</param>
+    /// <param name="y">The y coordinate</param>
+    /// <returns>The nearest vertex, or null if the TIN is empty</returns>
+    public IVertex? GetNearestVertex(double x, double y)
+    {
+        var edge = GetNeighborEdge(x, y);
+        if (edge == null)
+            return null;
+
+        // Check the three vertices of the containing triangle
+        var a = edge.GetA();
+        var b = edge.GetB();
+        var c = edge.GetForward().GetB();
+
+        IVertex? nearest = null;
+        var minDist = double.PositiveInfinity;
+
+        if (!a.IsNullVertex())
+        {
+            var d = a.GetDistanceSq(x, y);
+            if (d < minDist)
+            {
+                minDist = d;
+                nearest = a;
+            }
+        }
+
+        if (!b.IsNullVertex())
+        {
+            var d = b.GetDistanceSq(x, y);
+            if (d < minDist)
+            {
+                minDist = d;
+                nearest = b;
+            }
+        }
+
+        if (!c.IsNullVertex())
+        {
+            var d = c.GetDistanceSq(x, y);
+            if (d < minDist)
+            {
+                nearest = c;
+            }
+        }
+
+        return nearest;
+    }
 }

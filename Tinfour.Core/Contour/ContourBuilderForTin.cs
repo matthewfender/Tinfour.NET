@@ -110,6 +110,11 @@ public class ContourBuilderForTin
     private readonly IVertexValuator? _valuator;
 
     /// <summary>
+    ///     When true, only process edges that are inside constraint regions.
+    /// </summary>
+    private readonly bool _constrainedRegionsOnly;
+
+    /// <summary>
     ///     A bitmap for tracking whether edges have been processed during contour
     ///     construction.
     /// </summary>
@@ -144,11 +149,16 @@ public class ContourBuilderForTin
     ///     Indicates whether the builder should produce region
     ///     (polygon) structures in addition to contours.
     /// </param>
+    /// <param name="constrainedRegionsOnly">
+    ///     When true, contours are only generated within constraint regions.
+    ///     When false (default), contours are generated for the entire TIN.
+    /// </param>
     public ContourBuilderForTin(
         IIncrementalTin tin,
         IVertexValuator? vertexValuator,
         double[] zContour,
-        bool buildRegions = false)
+        bool buildRegions = false,
+        bool constrainedRegionsOnly = false)
     {
         if (tin == null) throw new ArgumentNullException(nameof(tin), "Null reference for input TIN");
 
@@ -165,6 +175,7 @@ public class ContourBuilderForTin
 
         _tin = tin;
         _valuator = vertexValuator ?? new DefaultValuator();
+        _constrainedRegionsOnly = constrainedRegionsOnly;
         _zContour = new double[zContour.Length];
         Array.Copy(zContour, _zContour, zContour.Length);
 
@@ -329,6 +340,29 @@ public class ContourBuilderForTin
     }
 
     /// <summary>
+    ///     Checks if an edge is inside a constraint region.
+    /// </summary>
+    /// <param name="edge">The edge to check.</param>
+    /// <returns>True if the edge is inside a constraint region, false otherwise.</returns>
+    private static bool IsEdgeInConstrainedRegion(IQuadEdge edge)
+    {
+        // An edge is considered inside a constraint region if it or any of its
+        // triangle edges is marked as interior to a constraint region
+        if (edge.IsConstraintRegionInterior())
+            return true;
+
+        var forward = edge.GetForward();
+        if (forward.IsConstraintRegionInterior())
+            return true;
+
+        var reverse = edge.GetReverse();
+        if (reverse.IsConstraintRegionInterior())
+            return true;
+
+        return false;
+    }
+
+    /// <summary>
     ///     Build contours that lie entirely inside the TIN and do not intersect
     ///     the perimeter edges. These contours form closed loops.
     /// </summary>
@@ -341,6 +375,13 @@ public class ContourBuilderForTin
             var e = p;
             var eIndex = e.GetIndex();
             if (_visited![eIndex]) continue;
+
+            // Skip edges outside constraint regions if filtering is enabled
+            if (_constrainedRegionsOnly && !IsEdgeInConstrainedRegion(e))
+            {
+                MarkAsVisited(e);
+                continue;
+            }
 
             MarkAsVisited(e);
             var A = e.GetA();

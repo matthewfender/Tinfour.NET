@@ -264,6 +264,44 @@ public class SimpleTriangle
         return $"Triangle[{_index}]: A({a.X:F2},{a.Y:F2}) B({b.X:F2},{b.Y:F2}) C({c.X:F2},{c.Y:F2})";
     }
 
+    /// <summary>
+    ///     Gets the constraint that contains this triangle, if any.
+    /// </summary>
+    /// <remarks>
+    ///     This method checks if the triangle is inside a constraint region
+    ///     by examining edge membership. It returns null because the triangle
+    ///     doesn't have direct access to the constraint list - callers should
+    ///     check edge membership directly using IsConstraintRegionMember().
+    /// </remarks>
+    /// <returns>Always returns null; callers should check edge membership directly.</returns>
+    public IConstraint? GetContainingRegion()
+    {
+        // Check if all edges are members of a constraint region
+        if (!_edgeA.IsConstraintRegionMember())
+            return null;
+
+        // We don't have direct access to the constraint list here,
+        // Return null to indicate caller should check edge membership directly
+        return null;
+    }
+
+    /// <summary>
+    ///     Gets the shortest edge of the triangle.
+    /// </summary>
+    /// <returns>The edge with the smallest length.</returns>
+    public IQuadEdge GetShortestEdge()
+    {
+        var la = _edgeA.GetLengthSquared();
+        var lb = _edgeB.GetLengthSquared();
+        var lc = _edgeC.GetLengthSquared();
+
+        if (la <= lb && la <= lc)
+            return _edgeA;
+        if (lb <= la && lb <= lc)
+            return _edgeB;
+        return _edgeC;
+    }
+
     private int ComputeIndex()
     {
         var aIndex = _edgeA.GetIndex();

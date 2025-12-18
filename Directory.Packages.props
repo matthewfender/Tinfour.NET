@@ -3,17 +3,15 @@
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
-  
   <ItemGroup>
     <!-- Test packages -->
+    <PackageVersion Include="Clipper2" Version="2.0.0" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.10.0" />
     <PackageVersion Include="xunit" Version="2.8.1" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="2.8.1" />
     <PackageVersion Include="coverlet.collector" Version="6.0.2" />
-    
     <!-- Benchmark packages -->
     <PackageVersion Include="BenchmarkDotNet" Version="0.13.12" />
-    
     <!-- Avalonia packages -->
     <!-- Important: keep version in sync! -->
     <PackageVersion Include="Avalonia" Version="11.3.4" />
@@ -25,11 +23,9 @@
     <PackageVersion Include="Avalonia.Browser" Version="11.3.4" />
     <PackageVersion Include="Avalonia.Android" Version="11.3.4" />
     <PackageVersion Include="Avalonia.Skia" Version="11.3.4" />
-
     <!-- UI Toolkit packages -->
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.0" />
     <PackageVersion Include="SkiaSharp" Version="2.88.9" />
-
     <!-- Xamarin packages -->
     <PackageVersion Include="Xamarin.AndroidX.Core.SplashScreen" Version="1.0.1.15" />
   </ItemGroup>

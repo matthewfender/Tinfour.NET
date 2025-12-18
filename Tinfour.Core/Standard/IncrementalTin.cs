@@ -111,6 +111,13 @@ public class IncrementalTin : IIncrementalTin
     /// </summary>
     private bool _lockedDueToConstraints;
 
+    /// <summary>
+    ///     Tracks the maximum length of the flood fill queue, used to determine
+    ///     if constraint region assignments should be propagated during edge operations.
+    ///     A value > 0 indicates flood fill has been performed.
+    /// </summary>
+    private int _maxLengthOfQueueInFloodFill;
+
     private int _nSyntheticVertices;
 
     /// <summary>
@@ -247,13 +254,18 @@ public class IncrementalTin : IIncrementalTin
 
         if (_isLocked)
         {
+            Console.WriteLine("AddConstraints: TIN is locked!");
             if (_lockedDueToConstraints)
                 throw new InvalidOperationException("Constraints already added - no further additions supported");
 
             throw new InvalidOperationException("TIN is locked");
         }
 
-        if (constraints == null || constraints.Count == 0) return;
+        if (constraints == null || constraints.Count == 0)
+        {
+            Console.WriteLine("AddConstraints: No constraints to add");
+            return;
+        }
 
         // Note: AddConstraints should only be called once during the lifetime of a TIN.
         // Multiple calls are not currently supported and may produce undefined results.
@@ -280,7 +292,6 @@ public class IncrementalTin : IIncrementalTin
 
             if (anyRedundant)
             {
-                Debug.WriteLine("Redundant vertice(s)  found");
                 var remapped = new List<IVertex>(c.GetVertices().Count);
                 var prior = Vertex.Null;
                 foreach (var v in c.GetVertices())
@@ -340,6 +351,10 @@ public class IncrementalTin : IIncrementalTin
             processor.FloodFillConstrainedRegion(c, visited, eList);
             if (eList.Count > 0) c.SetConstraintLinkingEdge(eList[0]);
         }
+
+        // Mark that flood fill has been performed - this enables constraint sweep
+        // operations in RestoreConformity for subsequent edge modifications
+        _maxLengthOfQueueInFloodFill = 1;
     }
 
     /// <summary>
@@ -498,12 +513,44 @@ public class IncrementalTin : IIncrementalTin
 
         var s0 = ghostEdge.GetReverse();
         var s = s0;
+        var maxIterations = _edgePool.Size() * 2 + 1000; // Safety limit
+        var iterations = 0;
         do
         {
+            if (++iterations > maxIterations)
+            {
+#if DEBUG
+                throw new InvalidOperationException($"GetPerimeter() exceeded {maxIterations} iterations - ghost edge topology is corrupted");
+#else
+                return GetPerimeterFallback();
+#endif
+            }
             perimeter.Add(s.GetDual());
             s = s.GetForward().GetForward().GetDual().GetReverse();
         }
         while (s != s0);
+
+        return perimeter;
+    }
+
+    /// <summary>
+    ///     Fallback method to get perimeter edges by scanning all edges.
+    ///     Used when the ghost edge traversal fails.
+    /// </summary>
+    private IList<IQuadEdge> GetPerimeterFallback()
+    {
+        var perimeter = new List<IQuadEdge>();
+
+        // Find all edges where one side is a ghost (B vertex is null)
+        // The perimeter edge is the dual of the ghost edge (the interior side)
+        foreach (var edge in _edgePool)
+        {
+            if (edge.GetB().IsNullVertex())
+            {
+                // This is a ghost edge (real -> ghost), add its dual (interior side)
+                perimeter.Add(edge.GetDual());
+            }
+        }
 
         return perimeter;
     }
@@ -616,6 +663,149 @@ public class IncrementalTin : IIncrementalTin
         if (vertexCount <= 0) return;
         var edges = vertexCount > int.MaxValue / 3 ? int.MaxValue : (int)(vertexCount * 3.2);
         _edgePool.PreAllocateEdges(edges);
+    }
+
+    /// <summary>
+    ///     Splits an existing edge at the specified parametric position.
+    ///     Uses simple manual wiring - does NOT handle ghost edges on the perimeter.
+    /// </summary>
+    /// <param name="edge">The edge to split</param>
+    /// <param name="t">Parametric position along edge (0.0 to 1.0, typically 0.5 for midpoint)</param>
+    /// <param name="z">The Z coordinate for the new vertex</param>
+    /// <returns>The newly created vertex at the split point, or null on failure</returns>
+    public IVertex? SplitEdge(IQuadEdge edge, double t, double z)
+    {
+        if (edge == null) return null;
+        if (!IsBootstrapped()) return null;
+        if (_isLocked) throw new InvalidOperationException("TIN is locked and cannot be modified.");
+
+        // Get the base edge (always work with base reference for consistency)
+        var ab = (QuadEdge)edge.GetBaseReference();
+        var ba = (QuadEdge)ab.GetDual();
+
+        var a = ab.GetA();
+        var b = ab.GetB();
+
+        // Skip if any vertex is null
+        if (a.IsNullVertex() || b.IsNullVertex()) return null;
+
+        // Clamp t to avoid zero-length edges
+        t = Math.Clamp(t, 0.01, 0.99);
+
+        // Compute the split point coordinates
+        var mx = a.X + t * (b.X - a.X);
+        var my = a.Y + t * (b.Y - a.Y);
+
+        // Create the new vertex
+        var m = new Vertex(mx, my, z, _nSyntheticVertices++);
+
+        // Inherit constraint status if the edge is constrained
+        if (ab.IsConstrained())
+        {
+            m = m.WithStatus(Vertex.BitSynthetic | Vertex.BitConstraint);
+        }
+        else
+        {
+            m = m.WithSynthetic(true);
+        }
+
+        // Get the surrounding edges for the quadrilateral(s)
+        var bc = (QuadEdge)ab.GetForward();
+        var ca = (QuadEdge)ab.GetReverse();
+        var ad = (QuadEdge)ba.GetForward();
+        var db = (QuadEdge)ba.GetReverse();
+
+        var c = bc.GetB();
+        var d = ad.GetB();
+
+        // Determine constraint indices for the new interior edges
+        var constraintIndexForC = -1;
+        var constraintIndexForD = -1;
+
+        if (_constraintList.Count > 0)
+        {
+            if (ab.IsConstraintRegionInterior())
+            {
+                var con = GetRegionConstraint(ab);
+                if (con != null)
+                {
+                    var idx = con.GetConstraintIndex();
+                    constraintIndexForC = idx;
+                    constraintIndexForD = idx;
+                }
+            }
+            else if (ab.IsConstraintRegionBorder())
+            {
+                // Check which side is inside the constraint region
+                if (bc.IsConstraintRegionInterior())
+                    constraintIndexForC = bc.GetConstraintRegionInteriorIndex();
+                else if (ca.IsConstraintRegionInterior())
+                    constraintIndexForC = ca.GetConstraintRegionInteriorIndex();
+
+                if (ad.IsConstraintRegionInterior())
+                    constraintIndexForD = ad.GetConstraintRegionInteriorIndex();
+                else if (db.IsConstraintRegionInterior())
+                    constraintIndexForD = db.GetConstraintRegionInteriorIndex();
+            }
+        }
+
+        // Remember if this was a border edge before splitting
+        var wasBorderEdge = ab.IsConstraintRegionBorder();
+        var borderIndex = wasBorderEdge ? ab.GetConstraintBorderIndex() : -1;
+
+        // Split the edge ab by inserting midpoint m
+        var mb = ab;
+        var bm = ba;
+        var am = (QuadEdge)_edgePool.SplitEdge(ab, m);
+        var ma = (QuadEdge)am.GetDual();
+
+        // Ensure BOTH halves of a split border edge remain border edges
+        if (wasBorderEdge && borderIndex >= 0)
+        {
+            if (!am.IsConstraintRegionBorder())
+                am.SetConstraintBorderIndex(borderIndex);
+            if (!mb.IsConstraintRegionBorder())
+                mb.SetConstraintBorderIndex(borderIndex);
+        }
+
+        // Wire up the c-side (if not ghost)
+        if (!c.IsNullVertex())
+        {
+            var cm = (QuadEdge)_edgePool.AllocateEdge(c, m);
+            var mc = (QuadEdge)cm.GetDual();
+
+            mb.SetForward(bc);
+            bc.SetForward(cm);
+            cm.SetForward(mb);
+
+            mc.SetForward(ca);
+            ca.SetForward(am);
+            am.SetForward(mc);
+
+            if (constraintIndexForC >= 0)
+                cm.SetConstraintRegionInteriorIndex(constraintIndexForC);
+        }
+
+        // Wire up the d-side (if not ghost)
+        if (!d.IsNullVertex())
+        {
+            var dm = (QuadEdge)_edgePool.AllocateEdge(d, m);
+            var md = (QuadEdge)dm.GetDual();
+
+            ma.SetForward(ad);
+            ad.SetForward(dm);
+            dm.SetForward(ma);
+
+            md.SetForward(db);
+            db.SetForward(bm);
+            bm.SetForward(md);
+
+            if (constraintIndexForD >= 0)
+                dm.SetConstraintRegionInteriorIndex(constraintIndexForD);
+        }
+
+        _vertexCount++;
+        return m;
     }
 
     /// <summary>
@@ -775,6 +965,76 @@ public class IncrementalTin : IIncrementalTin
         return null;
     }
 
+    /// <summary>
+    ///     Computes the distance from a point to an edge segment.
+    ///     This matches Java's IncrementalTinNavigator.edgeDistance method.
+    /// </summary>
+    private static double EdgeDistance(IVertex A, IVertex B, double x, double y)
+    {
+        var dX = x - A.X;
+        var dY = y - A.Y;
+        var vX = B.X - A.X;
+        var vY = B.Y - A.Y;
+        var vM = Math.Sqrt(vX * vX + vY * vY);  // magnitude of vector (vX, vY)
+        var t = (dX * vX + dY * vY) / vM;
+        if (t < 0)
+        {
+            // (x,y) is positioned before the start of the edge.
+            // report the distance from the starting vertex.
+            return Math.Sqrt(dX * dX + dY * dY);
+        }
+        if (t > vM)
+        {
+            // (x,y) is beyond the end of the edge.
+            // report the distance from the ending vertex.
+            var bX = x - B.X;
+            var bY = y - B.Y;
+            return Math.Sqrt(bX * bX + bY * bY);
+        }
+        // report the perpendicular distance from the line.
+        var pX = -vY;
+        var pY = vX;
+        return Math.Abs(dX * pX + dY * pY) / vM;
+    }
+
+    /// <summary>
+    ///     Finds the nearest edge of a triangle to the given point.
+    ///     This matches Java's IncrementalTinNavigator.getNearestEdge logic.
+    /// </summary>
+    private static IQuadEdge GetNearestEdgeInTriangle(IQuadEdge a, double x, double y)
+    {
+        var b = a.GetForward();
+        var c = a.GetReverse();
+
+        var A = a.GetA();
+        var B = b.GetA();
+        var C = c.GetA();
+
+        // Compute distance to edge a (from A to B)
+        var pMin = EdgeDistance(A, B, x, y);
+        var e = a;
+
+        // Check distance to edge b (from B to C)
+        if (!C.IsNullVertex())
+        {
+            var test = EdgeDistance(B, C, x, y);
+            if (test < pMin)
+            {
+                pMin = test;
+                e = b;
+            }
+
+            // Check distance to edge c (from C to A)
+            test = EdgeDistance(C, A, x, y);
+            if (test < pMin)
+            {
+                e = c;
+            }
+        }
+
+        return e;
+    }
+
     private double InCircleWithGhosts(IVertex a, IVertex b, IVertex v)
     {
         var h = (v.X - a.X) * (a.Y - b.Y) + (v.Y - a.Y) * (b.X - a.X);
@@ -832,16 +1092,36 @@ public class IncrementalTin : IIncrementalTin
             // Vertex already exists in TIN, return the edge pointing to it
             return matchEdge;
 
-        var anchor = searchEdge.GetA();
-
         // If we're inserting outside the current convex hull
         if (searchEdge.GetB().IsNullVertex())
 
             // Extend the TIN to include this new vertex
             return ExtendTin(searchEdge, v);
 
+        // Match Java's getNearestEdge logic: find the edge of the triangle that is
+        // nearest to the vertex being inserted. This is important for constraint
+        // region detection - we need to check the NEAREST edge, not just any edge.
+        // Java's IncrementalTinNavigator.getNearestEdge computes distances to all
+        // three edges and returns the nearest one.
+        searchEdge = GetNearestEdgeInTriangle(searchEdge, x, y);
+
+        // Get anchor AFTER finding nearest edge (matching Java's order)
+        var anchor = searchEdge.GetA();
+
+        // Check if we're inserting inside a constraint region
+        // Match Java logic: only check searchEdge (now the nearest edge).
+        // If the nearest edge is a constraint region member, the vertex is inside.
+        var vertexConstraintIndex = -1;
+        if (_constraintList.Count > 0 && searchEdge.IsConstraintRegionMember())
+        {
+            var con = GetRegionConstraint(searchEdge);
+            if (con != null)
+            {
+                vertexConstraintIndex = con.GetConstraintIndex();
+            }
+        }
+
         // Insert within existing TIN - Implementation of Lawson's algorithm
-        var replacements = 0;
         QuadEdge? buffer = null;
         var c = (QuadEdge)searchEdge;
 
@@ -876,8 +1156,12 @@ public class IncrementalTin : IIncrementalTin
                 // Standard in-circle test for non-ghost triangles
                 h = _geoOp.InCircle(vA, vB, vC, v);
 
-            // If h >= 0, the Delaunay criterion is not met, so flip the edge
-            if (h >= 0)
+            // If h >= 0, the Delaunay criterion is not met, so we may need to flip the edge.
+            // CRITICAL: Never flip constrained edges - they must remain in place to maintain
+            // the constraint geometry. This matches Java's behavior at line 1359.
+            var edgeViolatesDelaunay = h >= 0 && !c.IsConstrained();
+
+            if (edgeViolatesDelaunay)
             {
                 // Edge flip procedure
                 n2 = (QuadEdge)n1.GetForward();
@@ -898,7 +1182,6 @@ public class IncrementalTin : IIncrementalTin
                 }
 
                 c = n1;
-                replacements++;
             }
             else
             {
@@ -909,6 +1192,13 @@ public class IncrementalTin : IIncrementalTin
 
                     // Return unused buffer edge to the pool if it exists
                     if (buffer != null) _edgePool.DeallocateEdge(buffer);
+
+                    // Propagate constraint region membership to all newly created edges
+                    // This is essential for Ruppert refinement to work correctly
+                    if (vertexConstraintIndex >= 0)
+                    {
+                        PropagateConstraintRegionMembership(pStart, vertexConstraintIndex);
+                    }
 
                     return pStart;
                 }
@@ -933,6 +1223,52 @@ public class IncrementalTin : IIncrementalTin
                 c.SetForward(e.GetDual());
                 p = e;
                 c = n1;
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Propagates constraint region membership to all edges around a newly inserted vertex.
+    ///     This is essential for Ruppert refinement to work correctly - when a vertex is inserted
+    ///     inside a constraint region, all the newly created edges must be marked as interior
+    ///     members of that constraint region.
+    /// </summary>
+    /// <param name="pStart">An edge starting from the inserted vertex</param>
+    /// <param name="constraintIndex">The constraint index to propagate</param>
+    private void PropagateConstraintRegionMembership(QuadEdge pStart, int constraintIndex)
+    {
+        // This matches the Java Tinfour logic exactly from insertActionInnerProcess
+        // (lines 1426-1446 in IncrementalTin.java)
+        //
+        // When a vertex is inserted inside a constraint region, mark all new edges
+        // radiating from it as interior edges.
+
+        var currentConstraintIndex = constraintIndex;
+
+        // Handle pStart specially (matches Java lines 1428-1436)
+        if (pStart.IsConstraintRegionBorder())
+        {
+            // The vertex constraint index may be set to the value of the
+            // right-hand side of pStart, we need the constraint for the left.
+            var con = GetBorderConstraint(pStart);
+            currentConstraintIndex = con?.GetConstraintIndex() ?? -1;
+        }
+        if (currentConstraintIndex >= 0 && !pStart.IsConstrained() && !pStart.IsConstraintRegionMember())
+        {
+            pStart.SetConstraintRegionInteriorIndex(currentConstraintIndex);
+        }
+
+        // Iterate around the pinwheel (matches Java lines 1437-1445)
+        foreach (var e in pStart.GetPinwheel())
+        {
+            if (e.IsConstraintRegionBorder())
+            {
+                var con = GetBorderConstraint(e);
+                currentConstraintIndex = con?.GetConstraintIndex() ?? -1;
+            }
+            if (currentConstraintIndex >= 0 && !e.IsConstrained() && !e.IsConstraintRegionMember())
+            {
+                e.SetConstraintRegionInteriorIndex(currentConstraintIndex);
             }
         }
     }
@@ -1003,8 +1339,10 @@ public class IncrementalTin : IIncrementalTin
     /// <param name="depthOfRecursion">Current recursion depth for tracking</param>
     private void RestoreConformity(QuadEdge ab, int depthOfRecursion = 1)
     {
-        // Check if constraint flood fill has been performed
-        var constraintSweepRequired = true; // TODO: implement _maxLengthOfQueueInFloodFill > 0
+        // Only perform constraint sweep if flood fill has been completed
+        // This matches the Java behavior where SweepForConstraintAssignments
+        // is only called when _maxLengthOfQueueInFloodFill > 0
+        var constraintSweepRequired = _maxLengthOfQueueInFloodFill > 0;
 
         // Get all the relevant edges and vertices around the quadrilateral
         var ba = (QuadEdge)ab.GetDual();
@@ -1073,6 +1411,51 @@ public class IncrementalTin : IIncrementalTin
             db.SetForward(bm);
             bm.SetForward(md);
 
+            // Propagate constraint region membership to cm and dm based on the triangles they're in.
+            // For border edges, we need to determine which side is inside the constraint region.
+            if (ab.IsConstraintRegionBorder())
+            {
+                // Check if c-side is inside by looking at adjacent edges
+                var constraintIndexForC = -1;
+                if (bc.IsConstraintRegionInterior())
+                {
+                    constraintIndexForC = bc.GetConstraintRegionInteriorIndex();
+                }
+                else if (ca.IsConstraintRegionInterior())
+                {
+                    constraintIndexForC = ca.GetConstraintRegionInteriorIndex();
+                }
+                if (constraintIndexForC >= 0)
+                {
+                    cm.SetConstraintRegionInteriorIndex(constraintIndexForC);
+                }
+
+                // Check if d-side is inside by looking at adjacent edges
+                var constraintIndexForD = -1;
+                if (ad.IsConstraintRegionInterior())
+                {
+                    constraintIndexForD = ad.GetConstraintRegionInteriorIndex();
+                }
+                else if (db.IsConstraintRegionInterior())
+                {
+                    constraintIndexForD = db.GetConstraintRegionInteriorIndex();
+                }
+                if (constraintIndexForD >= 0)
+                {
+                    dm.SetConstraintRegionInteriorIndex(constraintIndexForD);
+                }
+            }
+            else if (ab.IsConstraintRegionInterior())
+            {
+                // Interior edge - both sides are in the same region
+                var idx = ab.GetConstraintRegionInteriorIndex();
+                if (idx >= 0)
+                {
+                    cm.SetConstraintRegionInteriorIndex(idx);
+                    dm.SetConstraintRegionInteriorIndex(idx);
+                }
+            }
+
             // Recursively check the two new constrained edges
             RestoreConformity(am, depthOfRecursion + 1);
             RestoreConformity(mb, depthOfRecursion + 1);
@@ -1081,6 +1464,37 @@ public class IncrementalTin : IIncrementalTin
         {
             // Edge is not constrained, so we can flip it to restore Delaunay
             // This replaces edge ab (connecting a-b) with an edge connecting c-d
+            //
+            // After the flip, the edge dc will be the shared edge between two triangles:
+            //   - Triangle (d, c, a) with edges: dc, ca, ad
+            //   - Triangle (c, d, b) with edges: cd, db, bc
+            //
+            // We need to determine if the flipped edge should be interior.
+            // If all surrounding edges that are interior share the same constraint index,
+            // then the flipped edge should also be interior to that constraint.
+            var interiorConstraintIndex = -1;
+            var allInteriorSameIndex = true;
+
+            foreach (var surroundingEdge in new[] { bc, ca, ad, db })
+            {
+                if (surroundingEdge.IsConstraintRegionInterior())
+                {
+                    var idx = surroundingEdge.GetConstraintRegionInteriorIndex();
+                    if (interiorConstraintIndex < 0)
+                    {
+                        interiorConstraintIndex = idx;
+                    }
+                    else if (interiorConstraintIndex != idx)
+                    {
+                        // Different constraint indices - can't be sure what the flipped edge should be
+                        allInteriorSameIndex = false;
+                    }
+                }
+            }
+
+            // Clear the old flags - the edge is moving to a new position
+            ab.ClearConstraintRegionFlags();
+
             ab.SetVertices(d, c);
             ab.SetReverse(ad);
             ab.SetForward(ca);
@@ -1088,6 +1502,12 @@ public class IncrementalTin : IIncrementalTin
             ba.SetForward(db);
             ca.SetForward(ad);
             db.SetForward(bc);
+
+            // If surrounding edges are interior to the same constraint, mark the flipped edge as interior too
+            if (allInteriorSameIndex && interiorConstraintIndex >= 0)
+            {
+                ab.SetConstraintRegionInteriorIndex(interiorConstraintIndex);
+            }
         }
 
         // Recursively check the surrounding edges
@@ -1102,42 +1522,54 @@ public class IncrementalTin : IIncrementalTin
     /// <summary>
     ///     Ensures proper constraint region interior flags are propagated
     ///     through the triangulation when edges are modified.
+    ///     This is based on the Java implementation which only propagates if the
+    ///     starting edge is already a constraint region member.
     /// </summary>
     /// <param name="ab">The edge from which to start the sweep</param>
     private void SweepForConstraintAssignments(QuadEdge ab)
     {
+        // This matches the Java Tinfour pattern - use the same logic as
+        // PropagateConstraintRegionMembership for consistency.
+        //
+        // Only propagate from edges that are part of a constraint region
+        if (!ab.IsConstraintRegionMember())
+        {
+            return;
+        }
+
         var con = GetRegionConstraint(ab);
         var constraintIndex = con == null ? -1 : con.GetConstraintIndex();
+        if (constraintIndex < 0)
+        {
+            return;
+        }
+
+        // Handle ab specially
+        if (ab.IsConstraintRegionBorder())
+        {
+            con = GetBorderConstraint(ab);
+            constraintIndex = con?.GetConstraintIndex() ?? -1;
+        }
+        if (constraintIndex >= 0 && !ab.IsConstrained() && !ab.IsConstraintRegionMember())
+        {
+            ab.SetConstraintRegionInteriorIndex(constraintIndex);
+        }
 
         // Process all edges in the pinwheel around vertex a
         foreach (var e in ab.GetPinwheel())
         {
             var vertexB = e.GetB();
             if (vertexB.IsNullVertex())
-
-                // Skip ghost edges
                 continue;
-
-            if (con == null)
-            {
-                con = GetRegionConstraint(e);
-                constraintIndex = con == null ? -1 : con.GetConstraintIndex();
-            }
 
             if (e.IsConstraintRegionBorder())
             {
                 con = GetBorderConstraint(e);
-                constraintIndex = con == null ? -1 : con.GetConstraintIndex();
+                constraintIndex = con?.GetConstraintIndex() ?? -1;
             }
-            else if (con != null && constraintIndex >= 0)
+            if (constraintIndex >= 0 && !e.IsConstrained() && !e.IsConstraintRegionMember())
             {
                 e.SetConstraintRegionInteriorIndex(constraintIndex);
-            }
-
-            if (constraintIndex >= 0)
-            {
-                var f = e.GetForward();
-                if (!f.IsConstraintRegionBorder()) f.SetConstraintRegionInteriorIndex(constraintIndex);
             }
         }
     }

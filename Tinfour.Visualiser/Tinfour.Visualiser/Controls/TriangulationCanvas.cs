@@ -754,6 +754,7 @@ public class TriangulationCanvas : Control
 
         private void DrawTriangulation(SKCanvas canvas)
         {
+            Debug.WriteLine("DrawTriangulation: Starting...");
             // Standard triangulation drawing code - triangles, edges, vertices
             using var defaultTrianglePaint = new SKPaint
                                                  {
@@ -865,8 +866,16 @@ public class TriangulationCanvas : Control
             }
             else if (this._showTriangles)
             {
+                Debug.WriteLine("DrawTriangulation: Drawing triangles...");
+                var triangleCount = 0;
+                const int maxTriangles = 500_000; // Safety limit
                 foreach (var triangle in this._triangulation.GetTriangles())
                 {
+                    if (++triangleCount > maxTriangles)
+                    {
+                        Debug.WriteLine($"WARNING: Triangle rendering stopped at {maxTriangles} triangles to prevent OOM");
+                        break;
+                    }
                     if (triangle.IsGhost()) continue;
 
                     var a = new SKPoint((float)triangle.GetVertexA().X, (float)triangle.GetVertexA().Y);
@@ -907,32 +916,25 @@ public class TriangulationCanvas : Control
 
                     canvas.DrawPath(path, paintToUse);
                 }
+                Debug.WriteLine($"DrawTriangulation: Finished triangles ({triangleCount} drawn)");
             }
 
             if (this._showEdges)
             {
-                // if (_useTriangleCollector)
-                // {
-                // foreach (var triangle in TriangleCollector.VisitTrianglesConstrained(_triangulation))
-                // {
-                // foreach (var edge in new IQuadEdge[]
-                // { triangle.GetEdgeA(), triangle.GetEdgeB(), triangle.GetEdgeC() })
-                // {
-                // var vertexA = edge.GetA();
-                // var vertexB = edge.GetB();
-                // if (vertexB.IsNullVertex()) continue;
-
-                // var pointA = new SKPoint((float)vertexA.X, (float)vertexA.Y);
-                // var pointB = new SKPoint((float)vertexB.X, (float)vertexB.Y);
-
-                // bool isConstrained = edge.IsConstrained();
-                // canvas.DrawLine(pointA, pointB, isConstrained ? constraintEdgePaint : edgePaint);
-                // }
-                // }
-                // }
-                // else
-                foreach (var edge in this._triangulation.GetEdges())
+                Debug.WriteLine("DrawTriangulation: Drawing edges...");
+                var edgeCount = 0;
+                const int maxEdges = 500_000; // Safety limit
+                foreach (var edge in this._triangulation.GetEdgeIterator())
                 {
+                    if (++edgeCount > maxEdges)
+                    {
+                        Debug.WriteLine($"WARNING: Edge rendering stopped at {maxEdges} edges to prevent OOM");
+                        break;
+                    }
+                    if (edgeCount % 50000 == 0)
+                    {
+                        Debug.WriteLine($"DrawTriangulation: Edge progress {edgeCount}...");
+                    }
                     var vertexA = edge.GetA();
                     var vertexB = edge.GetB();
                     if (vertexB.IsNullVertex()) continue;
@@ -944,11 +946,15 @@ public class TriangulationCanvas : Control
 
                     canvas.DrawLine(pointA, pointB, isConstrained ? constraintEdgePaint : edgePaint);
                 }
+                Debug.WriteLine($"DrawTriangulation: Finished edges ({edgeCount} drawn)");
 
-                var perimeterEdges = this._triangulation.GetPerimeter().ToList();
+                // Get perimeter once and reuse
+                Debug.WriteLine("DrawTriangulation: Drawing perimeter...");
+                var perimeterEdges = this._triangulation.GetPerimeter();
+                Debug.WriteLine($"DrawTriangulation: Perimeter has {perimeterEdges.Count} edges");
 
-                // always show perimeter edges in a different paint 
-                foreach (var edge in this._triangulation.GetPerimeter())
+                // always show perimeter edges in a different paint
+                foreach (var edge in perimeterEdges)
                 {
                     var vertexA = edge.GetA();
                     var vertexB = edge.GetB();
@@ -959,14 +965,22 @@ public class TriangulationCanvas : Control
 
                     canvas.DrawLine(pointA, pointB, perimeterEdgePaint);
                 }
+                Debug.WriteLine("DrawTriangulation: Finished perimeter");
             }
 
             if (this._showVertices)
             {
+                Debug.WriteLine("DrawTriangulation: Drawing vertices...");
                 var adjustedSize = this._vertexSize / this._scale;
+                var vertexCount = 0;
                 foreach (var vertex in this._triangulation.GetVertices())
+                {
                     canvas.DrawCircle((float)vertex.X, (float)vertex.Y, adjustedSize, vertexPaint);
+                    vertexCount++;
+                }
+                Debug.WriteLine($"DrawTriangulation: Finished vertices ({vertexCount} drawn)");
             }
+            Debug.WriteLine("DrawTriangulation: Complete");
         }
 
         private void DrawVoronoi(SKCanvas canvas)
