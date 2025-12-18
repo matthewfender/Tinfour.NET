@@ -95,6 +95,7 @@ public class RuppertRefiner : IDelaunayRefiner
     private readonly bool _skipSeditiousTriangles;
     private readonly bool _ignoreSeditiousEncroachments;
     private readonly bool _interpolateZ;
+    private readonly bool _refineOnlyInsideConstraints;
 
     // Vertex metadata tracking
     private readonly Dictionary<IVertex, VData> _vdata;
@@ -278,6 +279,13 @@ public class RuppertRefiner : IDelaunayRefiner
         _maxIterations = options.MaxIterations;
         _skipSeditiousTriangles = options.SkipSeditiousTriangles;
         _ignoreSeditiousEncroachments = options.IgnoreSeditiousEncroachments;
+        _refineOnlyInsideConstraints = options.RefineOnlyInsideConstraints;
+
+        // Add bounding box constraint if requested
+        if (options.AddBoundingBoxConstraint)
+        {
+            AddBoundingBoxConstraint(tin, options.BoundingBoxBufferPercent);
+        }
 
         // Initialize collections with reference equality comparison for edges
         _vdata = new Dictionary<IVertex, VData>(ReferenceEqualityComparer.Instance);
@@ -499,6 +507,140 @@ public class RuppertRefiner : IDelaunayRefiner
         return info;
     }
 
+    /// <summary>
+    ///     Adds a bounding box polygon constraint around the existing vertices.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Creates a rectangular constraint boundary around the terrain data with
+    ///         interpolated Z values. Outer buffer vertices are added beyond the constraint
+    ///         to make constraint edges interior edges (not perimeter edges).
+    ///     </para>
+    /// </remarks>
+    /// <param name="tin">The TIN to add the constraint to</param>
+    /// <param name="bufferPercent">Buffer percentage to expand beyond data bounds</param>
+    private void AddBoundingBoxConstraint(IIncrementalTin tin, double bufferPercent)
+    {
+        var bounds = tin.GetBounds();
+        if (!bounds.HasValue)
+            return;
+
+        // GetBounds returns (Left=minX, Top=minY, Width, Height)
+        var (left, bottom, width, height) = bounds.Value;
+        var right = left + width;
+        var top = bottom + height;
+
+        // Constraint buffer: small buffer outside terrain data (user-specified %)
+        var constraintBufferX = width * bufferPercent / 100.0;
+        var constraintBufferY = height * bufferPercent / 100.0;
+
+        // Outer buffer: additional buffer beyond constraint (fixed small amount)
+        var outerBufferX = width * 0.5 / 100.0;
+        var outerBufferY = height * 0.5 / 100.0;
+
+        // Constraint bounds (just outside the terrain data)
+        var constraintMinX = left - constraintBufferX;
+        var constraintMaxX = right + constraintBufferX;
+        var constraintMinY = bottom - constraintBufferY;
+        var constraintMaxY = top + constraintBufferY;
+
+        // Outer buffer bounds (beyond the constraint)
+        var outerMinX = constraintMinX - outerBufferX;
+        var outerMaxX = constraintMaxX + outerBufferX;
+        var outerMinY = constraintMinY - outerBufferY;
+        var outerMaxY = constraintMaxY + outerBufferY;
+
+        // Create an interpolator to get Z values at constraint vertices
+        // Use InterpolateWithExteriorSupport to handle points outside convex hull
+        var tempInterpolator = new TriangularFacetInterpolator(tin);
+        var fallbackZ = ComputeAverageZ(tin);
+
+        double InterpolateOrFallback(double x, double y)
+        {
+            var z = tempInterpolator.InterpolateWithExteriorSupport(x, y, null);
+            return double.IsNaN(z) ? fallbackZ : z;
+        }
+
+        // Create multi-point constraint with interpolated Z values along each edge
+        var constraintWidth = constraintMaxX - constraintMinX;
+        var constraintHeight = constraintMaxY - constraintMinY;
+
+        const int minPointsPerEdge = 3;
+        const int maxPointsPerEdge = 20;
+        var vertexCount = tin.GetVertices().Count();
+        var avgSpacing = Math.Sqrt((width * height) / Math.Max(1, vertexCount));
+        var pointsPerHorizontalEdge = Math.Clamp((int)(constraintWidth / avgSpacing) + 1, minPointsPerEdge, maxPointsPerEdge);
+        var pointsPerVerticalEdge = Math.Clamp((int)(constraintHeight / avgSpacing) + 1, minPointsPerEdge, maxPointsPerEdge);
+
+        var constraintVertices = new List<Vertex>();
+
+        // Bottom edge: left to right
+        for (var i = 0; i < pointsPerHorizontalEdge; i++)
+        {
+            var t = (double)i / pointsPerHorizontalEdge;
+            var x = constraintMinX + t * constraintWidth;
+            var z = InterpolateOrFallback(x, constraintMinY);
+            constraintVertices.Add(new Vertex(x, constraintMinY, z, _vertexIndexer++));
+        }
+
+        // Right edge: bottom to top
+        for (var i = 0; i < pointsPerVerticalEdge; i++)
+        {
+            var t = (double)i / pointsPerVerticalEdge;
+            var y = constraintMinY + t * constraintHeight;
+            var z = InterpolateOrFallback(constraintMaxX, y);
+            constraintVertices.Add(new Vertex(constraintMaxX, y, z, _vertexIndexer++));
+        }
+
+        // Top edge: right to left
+        for (var i = 0; i < pointsPerHorizontalEdge; i++)
+        {
+            var t = (double)i / pointsPerHorizontalEdge;
+            var x = constraintMaxX - t * constraintWidth;
+            var z = InterpolateOrFallback(x, constraintMaxY);
+            constraintVertices.Add(new Vertex(x, constraintMaxY, z, _vertexIndexer++));
+        }
+
+        // Left edge: top to bottom
+        for (var i = 0; i < pointsPerVerticalEdge; i++)
+        {
+            var t = (double)i / pointsPerVerticalEdge;
+            var y = constraintMaxY - t * constraintHeight;
+            var z = InterpolateOrFallback(constraintMinX, y);
+            constraintVertices.Add(new Vertex(constraintMinX, y, z, _vertexIndexer++));
+        }
+
+        // Add outer buffer vertices (4 corners)
+        var outer1 = new Vertex(outerMinX, outerMinY, fallbackZ, _vertexIndexer++);
+        var outer2 = new Vertex(outerMaxX, outerMinY, fallbackZ, _vertexIndexer++);
+        var outer3 = new Vertex(outerMaxX, outerMaxY, fallbackZ, _vertexIndexer++);
+        var outer4 = new Vertex(outerMinX, outerMaxY, fallbackZ, _vertexIndexer++);
+
+        tin.Add(new List<Vertex> { outer1, outer2, outer3, outer4 });
+
+        // Create and add constraint
+        var boundingBoxConstraint = new PolygonConstraint(constraintVertices);
+        tin.AddConstraints(new List<IConstraint> { boundingBoxConstraint }, true);
+    }
+
+    /// <summary>
+    ///     Computes the average Z value of all vertices in the TIN.
+    /// </summary>
+    private static double ComputeAverageZ(IIncrementalTin tin)
+    {
+        var sum = 0.0;
+        var count = 0;
+        foreach (var v in tin.GetVertices())
+        {
+            if (!v.IsNullVertex())
+            {
+                sum += v.GetZ();
+                count++;
+            }
+        }
+        return count > 0 ? sum / count : 0.0;
+    }
+
     #endregion
 
     #region Triangle Quality Assessment
@@ -508,17 +650,22 @@ public class RuppertRefiner : IDelaunayRefiner
         if (t.IsGhost())
             return 0.0;
 
-        var constraints = _tin.GetConstraints();
-
-        if (constraints.Count >= 1)
+        // When RefineOnlyInsideConstraints is true (default), only refine triangles
+        // that are inside a constraint region. When false, refine all triangles.
+        if (_refineOnlyInsideConstraints)
         {
-            // Check if triangle is inside a constraint region by verifying edge membership
-            var eA = t.GetEdgeA();
-            var eB = t.GetEdgeB();
-            var eC = t.GetEdgeC();
+            var constraints = _tin.GetConstraints();
 
-            if (!eA.IsConstraintRegionMember() || !eB.IsConstraintRegionMember() || !eC.IsConstraintRegionMember())
-                return 0.0;
+            if (constraints.Count >= 1)
+            {
+                // Check if triangle is inside a constraint region by verifying edge membership
+                var eA = t.GetEdgeA();
+                var eB = t.GetEdgeB();
+                var eC = t.GetEdgeC();
+
+                if (!eA.IsConstraintRegionMember() || !eB.IsConstraintRegionMember() || !eC.IsConstraintRegionMember())
+                    return 0.0;
+            }
         }
 
         var a = t.GetVertexA();

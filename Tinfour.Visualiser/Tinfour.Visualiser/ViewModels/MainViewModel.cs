@@ -36,8 +36,10 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
 using Tinfour.Core.Common;
+using Tinfour.Core.Interpolation;
 using Tinfour.Core.Refinement;
 using Tinfour.Core.Standard;
+using Tinfour.Core.Utils;
 using Tinfour.Visualiser.Services;
 
 public partial class MainViewModel : ViewModelBase
@@ -153,6 +155,12 @@ public partial class MainViewModel : ViewModelBase
 
     [ObservableProperty]
     private double _ruppertMinAngle = 20.0;
+
+    [ObservableProperty]
+    private bool _refineOnlyInsideConstraints = true;
+
+    [ObservableProperty]
+    private bool _addBoundingBoxConstraint = false;
 
     [ObservableProperty]
     private bool _canApplyRuppert;
@@ -281,26 +289,33 @@ public partial class MainViewModel : ViewModelBase
         try
         {
             this.IsGenerating = true;
+
+            // Build smoothing filter if enabled
+            IVertexValuator? valuator = null;
+            var smoothingInfo = string.Empty;
+
+            if (this.ApplySmoothingToContours)
+            {
+                this.StatusText = $"Building smoothing filter ({this.SmoothingPasses} passes)...";
+                var smoothingFilter = await Task.Run(() => new SmoothingFilter(this.Triangulation, this.SmoothingPasses));
+                valuator = smoothingFilter;
+                smoothingInfo = $"\nSmoothing: {this.SmoothingPasses} passes ({smoothingFilter.TimeToConstructFilterMs:F1}ms)";
+            }
+
             this.StatusText = "Generating contours...";
 
             var result = await Task.Run(() => ContourRenderingService.GenerateContours(
                              this.Triangulation,
                              this.ContourLevels,
-                             this.ShowContourRegions));
+                             this.ShowContourRegions,
+                             valuator,
+                             this.ConstrainedInterpolationOnly));
 
             this.ContourResult = result;
 
-            //// Update contour display via MessageBus 
-            // MessageBus.RequestContourUpdate(
-            // result.Contours,
-            // result.Regions,
-            // true, // Show contours
-            // ShowContourRegions,
-            // ContourOpacity,
-            // ContourRegionOpacity);
             this.ShowContours = true;
             this.UpdateStatistics();
-            this.StatusText = $"✅ Contours Generated\n{result}";
+            this.StatusText = $"✅ Contours Generated\n{result}{smoothingInfo}";
         }
         catch (Exception ex)
         {
@@ -425,9 +440,9 @@ public partial class MainViewModel : ViewModelBase
             return;
         }
 
-        if (this.Triangulation.GetConstraints().Count == 0)
+        if (this.RefineOnlyInsideConstraints && !this.AddBoundingBoxConstraint && this.Triangulation.GetConstraints().Count == 0)
         {
-            this.StatusText = "❌ Error: Ruppert refinement requires constraints. Add constraints first.";
+            this.StatusText = "❌ Error: Ruppert refinement requires constraints when 'Refine only inside constraints' is enabled. Add constraints first, enable 'Add bounding box constraint', or disable the option.";
             return;
         }
 
@@ -436,7 +451,8 @@ public partial class MainViewModel : ViewModelBase
             this.IsGenerating = true;
             var initialVertexCount = this.Triangulation.GetVertices().Count;
             var initialTriangleCount = this.Triangulation.CountTriangles().ValidTriangles;
-            this.StatusText = $"Applying Ruppert refinement (min angle: {this.RuppertMinAngle}°)...";
+            var scopeText = this.RefineOnlyInsideConstraints ? "inside constraints" : "entire mesh";
+            this.StatusText = $"Applying Ruppert refinement ({scopeText}, min angle: {this.RuppertMinAngle}°)...";
 
             var sw = Stopwatch.StartNew();
             var verticesAdded = 0;
@@ -449,7 +465,9 @@ public partial class MainViewModel : ViewModelBase
                     MinimumAngleDegrees = this.RuppertMinAngle,
                     MaxIterations = 100_000,
                     InterpolateZ = true,  // Required for rasterization - interpolates Z values for new vertices
-                    InterpolationType = this.SelectedInterpolationType
+                    InterpolationType = this.SelectedInterpolationType,
+                    RefineOnlyInsideConstraints = this.RefineOnlyInsideConstraints,
+                    AddBoundingBoxConstraint = this.AddBoundingBoxConstraint
                 };
 
                 var refiner = new RuppertRefiner(this.Triangulation, options);
@@ -757,7 +775,7 @@ public partial class MainViewModel : ViewModelBase
         this.CanGenerateContours = value?.Tin != null && value.Tin.IsBootstrapped();
         this.CanGenerateInterpolation = value?.Tin != null && value.Tin.IsBootstrapped();
         this.CanGenerateVoronoi = value?.Tin != null && CanGenerateVoronoi(value.Tin);
-        this.CanApplyRuppert = value?.Tin != null && value.Tin.IsBootstrapped() && value.Tin.GetConstraints().Count > 0;
+        UpdateCanApplyRuppert();
 
         // Clear dependent results when triangulation changes
         // IMPORTANT: Use property setters (not backing fields) to trigger PropertyChanged
@@ -767,6 +785,32 @@ public partial class MainViewModel : ViewModelBase
         this.VoronoiResult = null;
 
         this.UpdateStatistics();
+    }
+
+    partial void OnRefineOnlyInsideConstraintsChanged(bool value)
+    {
+        UpdateCanApplyRuppert();
+    }
+
+    partial void OnAddBoundingBoxConstraintChanged(bool value)
+    {
+        UpdateCanApplyRuppert();
+    }
+
+    private void UpdateCanApplyRuppert()
+    {
+        var tin = this.TriangulationResult?.Tin;
+        if (tin == null || !tin.IsBootstrapped())
+        {
+            this.CanApplyRuppert = false;
+            return;
+        }
+
+        // If refining only inside constraints, we need constraints present OR bounding box will be added
+        // Otherwise, we can refine the entire mesh without constraints
+        this.CanApplyRuppert = !this.RefineOnlyInsideConstraints
+                               || this.AddBoundingBoxConstraint
+                               || tin.GetConstraints().Count > 0;
     }
 
     [RelayCommand]

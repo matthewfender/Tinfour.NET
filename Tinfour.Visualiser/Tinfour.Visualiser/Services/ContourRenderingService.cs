@@ -60,12 +60,14 @@ public static class ContourRenderingService
     /// <param name="numberOfLevels">Number of contour levels to generate</param>
     /// <param name="buildRegions">Whether to build polygon regions from contours</param>
     /// <param name="vertexValuator">Optional custom vertex valuator</param>
+    /// <param name="constrainedRegionsOnly">When true, only generate contours within constraint regions</param>
     /// <returns>Contour generation result</returns>
     public static ContourResult GenerateContours(
         IIncrementalTin tin,
         int numberOfLevels = 10,
         bool buildRegions = false,
-        IVertexValuator? vertexValuator = null)
+        IVertexValuator? vertexValuator = null,
+        bool constrainedRegionsOnly = false)
     {
         if (!tin.IsBootstrapped()) throw new ArgumentException("TIN is not bootstrapped", nameof(tin));
 
@@ -94,7 +96,7 @@ public static class ContourRenderingService
         // Generate evenly spaced contour levels
         var contourLevels = GenerateContourLevels(minZ, maxZ, numberOfLevels);
 
-        return GenerateContours(tin, contourLevels, buildRegions, vertexValuator);
+        return GenerateContours(tin, contourLevels, buildRegions, vertexValuator, constrainedRegionsOnly);
     }
 
     /// <summary>
@@ -104,12 +106,14 @@ public static class ContourRenderingService
     /// <param name="contourLevels">Specific Z values for contour generation</param>
     /// <param name="buildRegions">Whether to build polygon regions from contours</param>
     /// <param name="vertexValuator">Optional custom vertex valuator</param>
+    /// <param name="constrainedRegionsOnly">When true, only generate contours within constraint regions</param>
     /// <returns>Contour generation result</returns>
     public static ContourResult GenerateContours(
         IIncrementalTin tin,
         double[] contourLevels,
         bool buildRegions = false,
-        IVertexValuator? vertexValuator = null)
+        IVertexValuator? vertexValuator = null,
+        bool constrainedRegionsOnly = false)
     {
         if (!tin.IsBootstrapped()) throw new ArgumentException("TIN is not bootstrapped", nameof(tin));
 
@@ -128,7 +132,7 @@ public static class ContourRenderingService
                 throw new ArgumentException("Contour levels must be unique", nameof(contourLevels));
 
         // Generate contours using ContourBuilderForTin
-        var builder = new ContourBuilderForTin(tin, vertexValuator, sortedLevels, buildRegions);
+        var builder = new ContourBuilderForTin(tin, vertexValuator, sortedLevels, buildRegions, constrainedRegionsOnly);
 
         var contours = builder.GetContours();
         var regions = buildRegions ? builder.GetRegions() : new List<ContourRegion>();

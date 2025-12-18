@@ -144,6 +144,66 @@ public class RuppertOptions
     public bool InterpolateZ { get; set; } = false;
 
     /// <summary>
+    ///     Gets or sets whether to refine only triangles inside constraint regions.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         When true (default), only triangles that are members of a constraint region
+    ///         (i.e., inside a polygon constraint) are candidates for refinement. Triangles
+    ///         outside constraint regions are left as-is.
+    ///     </para>
+    ///     <para>
+    ///         When false, all triangles in the TIN are candidates for refinement,
+    ///         regardless of whether they are inside a constraint region. This is useful
+    ///         when you want to improve mesh quality across the entire triangulation,
+    ///         not just within constrained areas.
+    ///     </para>
+    ///     <para>
+    ///         Note: This option only has an effect when the TIN contains polygon constraints.
+    ///         If no constraints are present, all triangles are refined regardless of this setting.
+    ///     </para>
+    /// </remarks>
+    /// <value><c>true</c> to refine only inside constraints; otherwise <c>false</c>. Default is <c>true</c>.</value>
+    public bool RefineOnlyInsideConstraints { get; set; } = true;
+
+    /// <summary>
+    ///     Gets or sets whether to automatically add a bounding box constraint before refinement.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         When true, a rectangular polygon constraint is automatically added around the
+    ///         existing vertices before refinement begins. This prevents the refinement algorithm
+    ///         from expanding the mesh beyond the original data bounds.
+    ///     </para>
+    ///     <para>
+    ///         The bounding box is created with a small buffer (controlled by <see cref="BoundingBoxBufferPercent"/>)
+    ///         to ensure constraint edges don't coincide with perimeter edges.
+    ///     </para>
+    ///     <para>
+    ///         This option is particularly useful when <see cref="RefineOnlyInsideConstraints"/> is false
+    ///         and you want to refine the entire mesh while keeping it within original bounds.
+    ///     </para>
+    /// </remarks>
+    /// <value><c>true</c> to add a bounding box constraint; otherwise <c>false</c>. Default is <c>false</c>.</value>
+    public bool AddBoundingBoxConstraint { get; set; } = false;
+
+    /// <summary>
+    ///     Gets or sets the buffer percentage for the bounding box constraint.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         When <see cref="AddBoundingBoxConstraint"/> is true, this value determines how much
+    ///         larger the bounding box is than the actual data bounds, as a percentage of the
+    ///         bounds size. A small buffer ensures constraint edges don't coincide with perimeter edges.
+    ///     </para>
+    ///     <para>
+    ///         For example, a value of 1.0 means the bounding box is 1% larger on each side.
+    ///     </para>
+    /// </remarks>
+    /// <value>The buffer percentage. Default is 1.0 (1%).</value>
+    public double BoundingBoxBufferPercent { get; set; } = 1.0;
+
+    /// <summary>
     ///     Gets or sets the interpolation method to use for computing Z values of new vertices.
     /// </summary>
     /// <remarks>

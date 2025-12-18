@@ -75,23 +75,33 @@ public static class InterpolationRasterService
             PixelFormat.Bgra8888,
             AlphaFormat.Premul);
 
-        var minZ = double.MaxValue;
-        var maxZ = double.MinValue;
-        var validPixels = 0;
         var totalPixels = rasterResult.Width * rasterResult.Height;
         var values = rasterResult.Data;
 
-        // Compute min/max and valid pixel count
+        // Compute min/max from TIN vertices (not from interpolated values)
+        // This ensures color mapping uses the true terrain Z range, not values
+        // from synthetic buffer vertices or extrapolated regions
+        var minZ = double.MaxValue;
+        var maxZ = double.MinValue;
+        foreach (var vertex in tin.GetVertices())
+        {
+            if (vertex.IsNullVertex()) continue;
+            var z = vertex.GetZ();
+            if (!double.IsNaN(z) && double.IsFinite(z))
+            {
+                if (z < minZ) minZ = z;
+                if (z > maxZ) maxZ = z;
+            }
+        }
+
+        // Count valid pixels in the raster (for statistics only)
+        var validPixels = 0;
         for (var y = 0; y < rasterResult.Height; y++)
         for (var x = 0; x < rasterResult.Width; x++)
         {
             var z = values[x, y];
             if (!double.IsNaN(z) && double.IsFinite(z))
-            {
                 validPixels++;
-                if (z < minZ) minZ = z;
-                if (z > maxZ) maxZ = z;
-            }
         }
 
         // If no valid values found, create a blank bitmap
@@ -277,7 +287,7 @@ public static class InterpolationRasterService
 
         public override string ToString()
         {
-            return $"Raster: {this.Bitmap.PixelSize.Width}×{this.Bitmap.PixelSize.Height}, "
+            return $"Raster: {this.Bitmap.PixelSize.Width}ï¿½{this.Bitmap.PixelSize.Height}, "
                    + $"Z: {this.MinZ:F2} to {this.MaxZ:F2}, "
                    + $"Valid: {this.ValidPixels}/{this.TotalPixels} ({(double)this.ValidPixels / this.TotalPixels:P1}), "
                    + $"Method: {this.InterpolatorName}";
