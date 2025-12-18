@@ -48,23 +48,25 @@ public class QuadEdgePartnerTests
         Assert.Equal(11, partner.GetConstraintLineIndex()); // Line index works (UPPER bits)
     }
 
-    [Fact(Skip = "Known bit-field mismatch: GetConstraintBorderIndex reads LOWER bits but setter uses UPPER bits")]
+    [Fact]
     public void CombiningMultipleConstraintTypes_ShouldMaintainAllFlagsAndIndices()
     {
         // Arrange
         var primary = new QuadEdge(42);
         var partner = (QuadEdgePartner)primary.GetDual();
 
-        // Act
+        // Act - border and line now use separate bit fields (lower 15 and upper 12 bits)
         partner.SetConstraintBorderIndex(7);
         partner.SetConstraintLineIndex(11);
 
-        // Assert
+        // Assert - Note: border index uses lower bits, line index uses upper bits
+        // Setting border index clears any prior lower-bit value (interior)
+        // but both flags and indices should work correctly now
         Assert.True(partner.IsConstraintRegionBorder());
         Assert.True(partner.IsConstraintRegionMember());
         Assert.True(partner.IsConstraintLineMember());
         Assert.True(partner.IsConstrained());
-        Assert.Equal(7, partner.GetConstraintBorderIndex()); // FAILS: returns -1
+        Assert.Equal(7, partner.GetConstraintBorderIndex());
         Assert.Equal(11, partner.GetConstraintLineIndex());
     }
 
@@ -99,14 +101,10 @@ public class QuadEdgePartnerTests
     }
 
     /// <summary>
-    ///     KNOWN ISSUE: SetConstraintBorderIndex stores index in UPPER bits but GetConstraintBorderIndex
-    ///     reads from LOWER bits. This is a bit-field mismatch in the C# port.
-    ///     Despite this, the constraint system works because the demo/visualizer only uses the FLAG checks
-    ///     (IsConstraintRegionBorder, IsConstraintRegionInterior, etc.) rather than retrieving specific indices.
-    ///     Fixing this getter/setter mismatch breaks the demo's constraint region flood-fill for unknown reasons.
-    ///     TODO: Investigate why correcting this mismatch breaks constraint region detection.
+    ///     Tests that SetConstraintBorderIndex correctly stores and retrieves the border index.
+    ///     FIXED: Border index now uses lower 15 bits (same as interior), so getter/setter match.
     /// </summary>
-    [Fact(Skip = "Known bit-field mismatch: setter uses UPPER bits, getter reads LOWER bits. See test comment.")]
+    [Fact]
     public void SetConstraintBorderIndex_ShouldSetCorrectIndexAndFlags()
     {
         // Arrange
@@ -120,7 +118,7 @@ public class QuadEdgePartnerTests
         Assert.True(partner.IsConstraintRegionBorder());
         Assert.True(partner.IsConstraintRegionMember());
         Assert.True(partner.IsConstrained());
-        Assert.Equal(7, partner.GetConstraintBorderIndex()); // FAILS: returns -1 due to bit mismatch
+        Assert.Equal(7, partner.GetConstraintBorderIndex());
     }
 
     [Fact(
@@ -170,8 +168,8 @@ public class QuadEdgePartnerTests
         var primary = new QuadEdge(42);
         var partner = (QuadEdgePartner)primary.GetDual();
 
-        // Act & Assert
-        Assert.Throws<ArgumentOutOfRangeException>(() => partner.SetConstraintBorderIndex(10000));
+        // Act & Assert - border index now uses lower 15 bits (max 32766)
+        Assert.Throws<ArgumentOutOfRangeException>(() => partner.SetConstraintBorderIndex(32767));
     }
 
     [Fact]
@@ -212,8 +210,8 @@ public class QuadEdgePartnerTests
         var primary = new QuadEdge(42);
         var partner = (QuadEdgePartner)primary.GetDual();
 
-        // Act & Assert
-        Assert.Throws<ArgumentOutOfRangeException>(() => partner.SetConstraintIndex(10000));
+        // Act & Assert - constraint index now uses lower 15 bits (max 32766)
+        Assert.Throws<ArgumentOutOfRangeException>(() => partner.SetConstraintIndex(32767));
     }
 
     [Fact]

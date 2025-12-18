@@ -42,8 +42,8 @@ public class ConstraintBitManipulationTest
         var edge = new QuadEdge(0);
         var partner = (QuadEdgePartner)edge.GetDual();
 
-        // Test various constraint indices
-        var testIndices = new[] { 0, 1, 5, 100, 1000, 8190 };
+        // Test various constraint indices (border index now uses lower 15 bits, max 32766)
+        var testIndices = new[] { 0, 1, 5, 100, 1000, 10000, 32766 };
 
         foreach (var expectedIndex in testIndices)
         {
