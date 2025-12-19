@@ -374,3 +374,4 @@ FodyWeavers.xsd
 /Tinfour_java_source/.vscode/settings.json
 /ProfilerLogs
 /Tinfour.Core/CODE_AUDIT.md
+/.claude/settings.local.json

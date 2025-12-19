@@ -77,13 +77,48 @@ public class ConstrainedDelaunayTriangulationTests
         var tin = new IncrementalTin();
         tin.Add(new IVertex[] { new Vertex(0, 0, 0), new Vertex(1, 0, 0), new Vertex(0, 1, 0) });
 
-        // Create more than the maximum allowed constraints (8190)
+        // Create more than the maximum allowed constraints (32766 for polygon/region constraints)
         var constraints = new List<IConstraint>();
-        for (var i = 0; i < 8191; i++)
+        for (var i = 0; i < 32767; i++)
             constraints.Add(new LinearConstraint(new IVertex[] { new Vertex(i, 0, 0), new Vertex(i + 1, 0, 0) }));
 
         // Act & Assert
         Assert.Throws<ArgumentException>(() => tin.AddConstraints(constraints, true));
+    }
+
+    [Fact]
+    public void AddConstraints_AtMaximumLimit_ShouldSucceed()
+    {
+        // Arrange - create a TIN with enough vertices to support many constraints
+        var tin = new IncrementalTin();
+        var baseVertices = new List<IVertex>();
+        for (var i = 0; i < 150; i++)
+        for (var j = 0; j < 150; j++)
+            baseVertices.Add(new Vertex(i, j, 0));
+        tin.Add(baseVertices);
+
+        // Create 15,000 polygon constraints (well under the new 32,766 limit)
+        // Both border and interior indices now use the lower 15-bit field
+        var constraints = new List<IConstraint>();
+        for (var i = 0; i < 15000; i++)
+        {
+            var x = (i % 140) + 0.5;
+            var y = (i / 140) + 0.5;
+            var constraintVertices = new IVertex[]
+            {
+                new Vertex(x, y, 0, 1000000 + i * 4),
+                new Vertex(x + 0.1, y, 0, 1000001 + i * 4),
+                new Vertex(x + 0.1, y + 0.1, 0, 1000002 + i * 4),
+                new Vertex(x, y + 0.1, 0, 1000003 + i * 4)
+            };
+            constraints.Add(new PolygonConstraint(constraintVertices));
+        }
+
+        // Act - should not throw
+        tin.AddConstraints(constraints, false); // false to avoid slow conformity restoration
+
+        // Assert
+        Assert.Equal(15000, tin.GetConstraints().Count);
     }
 
     [Fact]

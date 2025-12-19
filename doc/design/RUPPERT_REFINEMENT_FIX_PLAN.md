@@ -921,9 +921,8 @@ QuadEdgePartner (dual, odd index)
         Bit 29: ConstraintRegionInteriorFlag
         Bit 28: ConstraintLineMemberFlag
         Bit 27: SyntheticEdgeFlag
-        Bit 26: Reserved
-        Bits 13-25: Line constraint index (13 bits, max 8190)
-        Bits 0-12: Region constraint index (13 bits, max 8190)
+        Bits 15-26: Line constraint index (12 bits, max 4094)
+        Bits 0-14: Region constraint index (15 bits, max 32766)
     _dual → QuadEdge (base)
 ```
 

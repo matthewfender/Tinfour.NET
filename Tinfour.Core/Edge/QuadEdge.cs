@@ -406,7 +406,7 @@ public class QuadEdge : IQuadEdge
     ///     and stores the index for that constraint.
     ///     Delegates to the dual partner which stores constraint information.
     /// </summary>
-    /// <param name="constraintIndex">A positive integer in the range zero to 8190, or -1 for a null constraint.</param>
+    /// <param name="constraintIndex">A positive integer in the range zero to 32766, or -1 for a null constraint.</param>
     public virtual void SetConstraintBorderIndex(int constraintIndex)
     {
         _dual.SetConstraintBorderIndex(constraintIndex);
@@ -426,11 +426,11 @@ public class QuadEdge : IQuadEdge
     }
 
     /// <summary>
-    ///     Sets a flag identifying the edge as the border of a line-based constraint
+    ///     Sets a flag identifying the edge as a member of a line-based constraint
     ///     and stores the index for that constraint.
     ///     Delegates to the dual partner which stores constraint information.
     /// </summary>
-    /// <param name="constraintIndex">A positive integer in range zero to 8190</param>
+    /// <param name="constraintIndex">A positive integer in range zero to 4094</param>
     public virtual void SetConstraintLineIndex(int constraintIndex)
     {
         _dual.SetConstraintLineIndex(constraintIndex);
@@ -459,7 +459,7 @@ public class QuadEdge : IQuadEdge
     ///     constraint and stores the index for that constraint.
     ///     Delegates to the dual partner which stores constraint information.
     /// </summary>
-    /// <param name="constraintIndex">A positive integer in the range 0 to 8190, or -1 for a null value</param>
+    /// <param name="constraintIndex">A positive integer in the range 0 to 32766, or -1 for a null value</param>
     public virtual void SetConstraintRegionInteriorIndex(int constraintIndex)
     {
         _dual.SetConstraintRegionInteriorIndex(constraintIndex);

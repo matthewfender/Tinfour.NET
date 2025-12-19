@@ -832,7 +832,7 @@ public class ContourBuilderForTin
                     if (zG > z && z > zK)
                     {
                         e = h.GetDual();
-                        V = null;
+                        V = Vertex.Null;
                         contour.Add(e, zG, zK);
                         break;
                     }

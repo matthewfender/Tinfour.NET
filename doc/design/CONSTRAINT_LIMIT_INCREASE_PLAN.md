@@ -439,24 +439,32 @@ Bit: 31 30 29 28 27 26 25 24 23 22 21 20 19 18 17 16 15 14 13 12 11 10  9  8  7 
 
 ## Implementation Summary
 
-The implementation was completed on December 15, 2025. The following files were modified:
+The implementation was completed on December 18, 2025. The following files were modified:
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| `Tinfour.Core/Edge/QuadEdgeConstants.cs` | Added `ConstraintLowerIndexBitSize` (15), `ConstraintUpperIndexBitSize` (12), `ConstraintLowerIndexValueMax` (32766), `ConstraintUpperIndexValueMax` (4094); updated masks |
-| `Tinfour.Core/Edge/QuadEdgePartner.cs` | Updated `GetConstraintLineIndex()` and `SetConstraintLineIndex()` to use new shift amounts; updated validation in all Set methods |
+| `Tinfour.Core/Edge/QuadEdgeConstants.cs` | Added `ConstraintLowerIndexBitSize` (15), `ConstraintUpperIndexBitSize` (12), `ConstraintLowerIndexValueMax` (32766), `ConstraintUpperIndexValueMax` (4094); updated masks; added helper methods `ExtractLowerIndex`, `ExtractUpperIndex`, `PackLowerIndex`, `PackUpperIndex` |
+| `Tinfour.Core/Edge/QuadEdgePartner.cs` | Fixed border index to use lower bits (same as interior - they're mutually exclusive); updated all constraint get/set methods to use new helper methods and validation |
 | `Tinfour.Core/Standard/IncrementalTin.cs` | Updated constraint count validation to use `QuadEdgeConstants.ConstraintIndexValueMax` |
 | `Tinfour.Core/Common/IQuadEdge.cs` | Updated XML documentation for new limits |
 | `Tinfour.Core/Edge/QuadEdge.cs` | Updated XML documentation for new limits |
 | `Tinfour.Core.Tests/Constraints/ConstrainedDelaunayTriangulationTests.cs` | Updated test for new maximum; added test for 15,000 constraints |
+| `Tinfour.Core.Tests/Edge/QuadEdgePartnerTests.cs` | Updated test values for new limits; enabled previously skipped tests |
+| `Tinfour.Core.Tests/Edge/ConstraintBitManipulationTest.cs` | Updated test values for new limits |
+
+### Critical Fix: Border Index Bit Field
+
+The original implementation stored border index in the **upper bits** (12-bit field), which meant polygon constraints were still limited to ~4,094 even with the asymmetric allocation. This was fixed by moving border index storage to use the **lower bits** (15-bit field), same as interior index. Since an edge cannot be both border and interior simultaneously, they can share the same bit field.
 
 ### Test Results
 
-- All 501 passing tests continue to pass
+- 529 tests pass
+- 12 pre-existing test failures remain (unrelated to this change - LinearConstraint, PolygonConstraint constructors, IDW tests)
+- 1 intentionally skipped test (alternative expectation)
 - New test `AddConstraints_AtMaximumLimit_ShouldSucceed` validates 15,000 polygon constraints work correctly
-- 16 pre-existing test failures remain (unrelated to this change)
+- Previously skipped tests for bit-field mismatch now pass
 
 ### Breaking Changes
 
@@ -465,8 +473,8 @@ The implementation was completed on December 15, 2025. The following files were 
 
 ---
 
-**Document Version:** 1.1
-**Last Updated:** December 15, 2025
+**Document Version:** 1.2
+**Last Updated:** December 18, 2025
 
 ---
 

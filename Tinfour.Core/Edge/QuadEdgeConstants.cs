@@ -36,25 +36,47 @@ internal static class QuadEdgeConstants
     public const int ConstraintFlagMask = unchecked((int)0xf8000000);
 
     /// <summary>
-    ///     The number of bits committed to the storage of a constraint index.
-    ///     Tinfour reserves space to store the constraint index values for
-    ///     the left and right side of a border constraint. Constraint indices
-    ///     are stored in the "index" element of the QuadEdgePartner class.
-    ///     The high order 5 bits are committed to various flags. So that
-    ///     leaves 27 bits available for constraint information. Since storage is
-    ///     required for two potential indices (left and right), thirteen bits
-    ///     are available for each.
+    ///     The number of bits committed to the storage of the lower (region/polygon)
+    ///     constraint index. Region constraints are more common in typical use cases,
+    ///     so they get more bits (15) allowing up to 32,766 polygon constraints.
     /// </summary>
-    public const int ConstraintIndexBitSize = 13;
+    public const int ConstraintLowerIndexBitSize = 15;
 
     /// <summary>
-    ///     The maximum value of a constraint index based on the 13 bits
-    ///     allocated for its storage. This would be a value of 8191, or 2^13-1.
-    ///     But QuadEdge reserves the value -1, bit state 0, to represent a null
-    ///     specification. For valid constraint indices, the QuadEdge implementation
-    ///     stores the constraint value plus one. That makes the maximum value 2^13-2
+    ///     The number of bits committed to the storage of the upper (line)
+    ///     constraint index. Line constraints are less common, so they get
+    ///     fewer bits (12) allowing up to 4,094 line constraints.
     /// </summary>
-    public const int ConstraintIndexValueMax = (1 << ConstraintIndexBitSize) - 2;
+    public const int ConstraintUpperIndexBitSize = 12;
+
+    /// <summary>
+    ///     The number of bits committed to the storage of a constraint index.
+    ///     This is the lower (region/polygon) index bit size for backward compatibility.
+    /// </summary>
+    public const int ConstraintIndexBitSize = ConstraintLowerIndexBitSize;
+
+    /// <summary>
+    ///     The maximum value of a region/polygon constraint index based on the 15 bits
+    ///     allocated for its storage. This would be a value of 32,767, or 2^15-1.
+    ///     But QuadEdge reserves the value 0 to represent a null specification.
+    ///     For valid constraint indices, the QuadEdge implementation stores the
+    ///     constraint value plus one. That makes the maximum value 2^15-2 = 32,766.
+    /// </summary>
+    public const int ConstraintLowerIndexValueMax = (1 << ConstraintLowerIndexBitSize) - 2;
+
+    /// <summary>
+    ///     The maximum value of a line constraint index based on the 12 bits
+    ///     allocated for its storage. This would be a value of 4,095, or 2^12-1.
+    ///     But QuadEdge reserves the value 0 to represent a null specification.
+    ///     That makes the maximum value 2^12-2 = 4,094.
+    /// </summary>
+    public const int ConstraintUpperIndexValueMax = (1 << ConstraintUpperIndexBitSize) - 2;
+
+    /// <summary>
+    ///     The maximum value of a constraint index. This is the lower (region/polygon)
+    ///     index maximum for backward compatibility, supporting up to 32,766 polygon constraints.
+    /// </summary>
+    public const int ConstraintIndexValueMax = ConstraintLowerIndexValueMax;
 
     /// <summary>
     ///     A bit indicating that an edge is part of a non-region constraint line.
@@ -65,16 +87,16 @@ internal static class QuadEdgeConstants
 
     /// <summary>
     ///     A specification for using an AND operation to extract the lower field of
-    ///     bits that contain a constraint index.
+    ///     bits that contain a constraint index (15 bits, 0-14).
     /// </summary>
-    public const int ConstraintLowerIndexMask = ~ConstraintLowerIndexZero;
+    public const int ConstraintLowerIndexMask = (1 << ConstraintLowerIndexBitSize) - 1;  // 0x7FFF
 
     /// <summary>
     ///     A specification for using an AND operation to zero out the lower field of
     ///     bits that contain a constraint index. Used in preparation for storing a
     ///     new value.
     /// </summary>
-    public const int ConstraintLowerIndexZero = unchecked((int)(0xffffffff << ConstraintIndexBitSize));
+    public const int ConstraintLowerIndexZero = unchecked((int)(0xffffffff << ConstraintLowerIndexBitSize));
 
     /// <summary>
     ///     A bit indicating that the edge is the border of a constrained region
@@ -93,9 +115,9 @@ internal static class QuadEdgeConstants
 
     /// <summary>
     ///     A specification for using an AND operation to extract the upper field of
-    ///     bits that contain a constraint index.
+    ///     bits that contain a constraint index (12 bits, 15-26).
     /// </summary>
-    public const int ConstraintUpperIndexMask = ConstraintLowerIndexMask << ConstraintIndexBitSize;
+    public const int ConstraintUpperIndexMask = ((1 << ConstraintUpperIndexBitSize) - 1) << ConstraintLowerIndexBitSize;
 
     /// <summary>
     ///     A specification for using an AND operation to zero out the upper-field of
@@ -114,4 +136,54 @@ internal static class QuadEdgeConstants
     ///     A bit indicating that an edge has been marked as synthetic.
     /// </summary>
     public const int SyntheticEdgeFlag = 1 << 27;
+
+    #region Helper Methods
+
+    /// <summary>
+    ///     Extracts the lower (region/polygon) constraint index from the packed index value.
+    /// </summary>
+    /// <param name="index">The packed index containing flags and constraint indices.</param>
+    /// <returns>The constraint index (0-based), or -1 if not set.</returns>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    public static int ExtractLowerIndex(int index)
+    {
+        var c = index & ConstraintLowerIndexMask;
+        return c != 0 ? c - 1 : -1;
+    }
+
+    /// <summary>
+    ///     Extracts the upper (line) constraint index from the packed index value.
+    /// </summary>
+    /// <param name="index">The packed index containing flags and constraint indices.</param>
+    /// <returns>The constraint index (0-based), or -1 if not set.</returns>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    public static int ExtractUpperIndex(int index)
+    {
+        var c = (index & ConstraintUpperIndexMask) >> ConstraintLowerIndexBitSize;
+        return c != 0 ? c - 1 : -1;
+    }
+
+    /// <summary>
+    ///     Packs a constraint index into the lower field position (for region/polygon constraints).
+    /// </summary>
+    /// <param name="constraintIndex">The 0-based constraint index.</param>
+    /// <returns>The value to OR into the packed index.</returns>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    public static int PackLowerIndex(int constraintIndex)
+    {
+        return constraintIndex + 1;
+    }
+
+    /// <summary>
+    ///     Packs a constraint index into the upper field position (for line constraints).
+    /// </summary>
+    /// <param name="constraintIndex">The 0-based constraint index.</param>
+    /// <returns>The value to OR into the packed index.</returns>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    public static int PackUpperIndex(int constraintIndex)
+    {
+        return (constraintIndex + 1) << ConstraintLowerIndexBitSize;
+    }
+
+    #endregion
 }

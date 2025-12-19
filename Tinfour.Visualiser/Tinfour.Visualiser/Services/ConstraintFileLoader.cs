@@ -110,24 +110,26 @@ public class ConstraintFileLoader
 
             // Add bounding box vertices to keep constraints off the perimeter
             // This prevents ghost edge topology issues when splitting constraint edges
-            if (addBoundingBox && minX < maxX && minY < maxY)
-            {
-                var padding = Math.Max(maxX - minX, maxY - minY) * 0.1; // 10% padding
-                var avgZ = (minZ + maxZ) / 2.0;
-                if (double.IsNaN(avgZ) || double.IsInfinity(avgZ))
-                    avgZ = 0.0;
+            // MF: 2025-12-18 - removing because we think we have fixed the underlying issue
+            // retaining just in case we haven't
+            //if (addBoundingBox && minX < maxX && minY < maxY)
+            //{
+            //    var padding = Math.Max(maxX - minX, maxY - minY) * 0.1; // 10% padding
+            //    var avgZ = (minZ + maxZ) / 2.0;
+            //    if (double.IsNaN(avgZ) || double.IsInfinity(avgZ))
+            //        avgZ = 0.0;
 
-                var cornerVertices = new List<IVertex>
-                {
-                    new Vertex(minX - padding, minY - padding, avgZ, -1),
-                    new Vertex(maxX + padding, minY - padding, avgZ, -2),
-                    new Vertex(maxX + padding, maxY + padding, avgZ, -3),
-                    new Vertex(minX - padding, maxY + padding, avgZ, -4)
-                };
+            //    var cornerVertices = new List<IVertex>
+            //    {
+            //        new Vertex(minX - padding, minY - padding, avgZ, -1),
+            //        new Vertex(maxX + padding, minY - padding, avgZ, -2),
+            //        new Vertex(maxX + padding, maxY + padding, avgZ, -3),
+            //        new Vertex(minX - padding, maxY + padding, avgZ, -4)
+            //    };
 
-                tin.Add(cornerVertices);
-                Debug.WriteLine($"AddConstraintsToTin: Added 4 bounding box vertices with padding {padding:F2}");
-            }
+            //    tin.Add(cornerVertices);
+            //    Debug.WriteLine($"AddConstraintsToTin: Added 4 bounding box vertices with padding {padding:F2}");
+            //}
 
             // Add the constraints to the TIN
             tin.AddConstraints(validConstraints, true);
