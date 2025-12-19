@@ -328,6 +328,15 @@ public class VertexMergerGroup : IVertex
     }
 
     /// <summary>
+    ///     Gets the current resolution rule for this merger group.
+    /// </summary>
+    /// <returns>The resolution rule currently in use.</returns>
+    public ResolutionRule GetResolutionRule()
+    {
+        return _rule;
+    }
+
+    /// <summary>
     ///     Sets the rule for resolving coincident vertices; recalculates
     ///     value for vertex if necessary
     /// </summary>

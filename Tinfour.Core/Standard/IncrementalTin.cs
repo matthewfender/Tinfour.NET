@@ -1737,4 +1737,107 @@ public class IncrementalTin : IIncrementalTin
         if (vertex.Y < _boundsMinY) _boundsMinY = vertex.Y;
         if (vertex.Y > _boundsMaxY) _boundsMaxY = vertex.Y;
     }
+
+    #region Serialization Support
+
+    /// <summary>
+    ///     Private constructor for deserialization. Creates an IncrementalTin shell
+    ///     that will be populated by the deserializer.
+    /// </summary>
+    private IncrementalTin(double nominalPointSpacing, bool forDeserialization)
+    {
+        _nominalPointSpacing = nominalPointSpacing;
+        _thresholds = new Thresholds(_nominalPointSpacing);
+        _geoOp = new GeometricOperations(_thresholds);
+        _bootstrapUtility = new BootstrapUtility(_thresholds);
+        _walker = new StochasticLawsonsWalk(_thresholds);
+        _edgePool = new EdgePool();
+        // _vertexList stays null - we're restoring a bootstrapped TIN
+    }
+
+    /// <summary>
+    ///     Creates an IncrementalTin instance for deserialization.
+    /// </summary>
+    internal static IncrementalTin CreateForDeserialization(double nominalPointSpacing)
+    {
+        return new IncrementalTin(nominalPointSpacing, forDeserialization: true);
+    }
+
+    /// <summary>
+    ///     Gets the edge pool for serialization access.
+    /// </summary>
+    internal EdgePool GetEdgePoolInternal() => _edgePool;
+
+    /// <summary>
+    ///     Gets the internal constraint list for serialization.
+    /// </summary>
+    internal List<IConstraint> GetConstraintListInternal() => _constraintList;
+
+    /// <summary>
+    ///     Gets the serialization state of this TIN.
+    /// </summary>
+    internal TinSerializationState GetSerializationState()
+    {
+        return new TinSerializationState
+        {
+            BoundsMinX = _boundsMinX,
+            BoundsMaxX = _boundsMaxX,
+            BoundsMinY = _boundsMinY,
+            BoundsMaxY = _boundsMaxY,
+            NominalPointSpacing = _nominalPointSpacing,
+            NSyntheticVertices = _nSyntheticVertices,
+            SearchEdgeBaseIndex = (_searchEdge as QuadEdge)?.GetBaseIndex() ?? -1,
+            MaxLengthOfQueueInFloodFill = _maxLengthOfQueueInFloodFill,
+            IsLocked = _isLocked,
+            LockedDueToConstraints = _lockedDueToConstraints,
+            IsConformant = _isConformant
+        };
+    }
+
+    /// <summary>
+    ///     Restores the serialization state of this TIN.
+    /// </summary>
+    internal void RestoreSerializationState(TinSerializationState state, IQuadEdge? searchEdge)
+    {
+        _boundsMinX = state.BoundsMinX;
+        _boundsMaxX = state.BoundsMaxX;
+        _boundsMinY = state.BoundsMinY;
+        _boundsMaxY = state.BoundsMaxY;
+        _nSyntheticVertices = state.NSyntheticVertices;
+        _maxLengthOfQueueInFloodFill = state.MaxLengthOfQueueInFloodFill;
+        _isLocked = state.IsLocked;
+        _lockedDueToConstraints = state.LockedDueToConstraints;
+        _isConformant = state.IsConformant;
+        _searchEdge = searchEdge;
+        // _vertexList stays null - bootstrapped TINs don't use it
+    }
+
+    /// <summary>
+    ///     Adds a constraint to the internal list during deserialization.
+    ///     Does NOT process the constraint - the edges already have constraint flags set.
+    /// </summary>
+    internal void AddConstraintForDeserialization(IConstraint constraint)
+    {
+        _constraintList.Add(constraint);
+    }
+
+    #endregion
+}
+
+/// <summary>
+///     Holds the serializable state of an IncrementalTin.
+/// </summary>
+internal class TinSerializationState
+{
+    public double BoundsMinX { get; set; }
+    public double BoundsMaxX { get; set; }
+    public double BoundsMinY { get; set; }
+    public double BoundsMaxY { get; set; }
+    public double NominalPointSpacing { get; set; }
+    public int NSyntheticVertices { get; set; }
+    public int SearchEdgeBaseIndex { get; set; }
+    public int MaxLengthOfQueueInFloodFill { get; set; }
+    public bool IsLocked { get; set; }
+    public bool LockedDueToConstraints { get; set; }
+    public bool IsConformant { get; set; }
 }

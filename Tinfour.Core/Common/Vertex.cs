@@ -181,6 +181,29 @@ public sealed class Vertex : IVertex
     }
 
     /// <summary>
+    ///     Creates a vertex for deserialization with all fields set directly.
+    ///     This method is internal to support TIN serialization.
+    /// </summary>
+    /// <param name="x">X coordinate</param>
+    /// <param name="y">Y coordinate</param>
+    /// <param name="z">Z value (stored as float)</param>
+    /// <param name="index">Vertex index</param>
+    /// <param name="status">Status flags (BitSynthetic, BitConstraint, BitWithheld)</param>
+    /// <param name="auxiliary">Auxiliary index (0-255)</param>
+    /// <returns>A new vertex with all fields set</returns>
+    internal static Vertex CreateForDeserialization(
+        double x, double y, float z, int index, byte status, byte auxiliary)
+    {
+        return new Vertex(x, y, z, index, status, auxiliary, 0, 0);
+    }
+
+    /// <summary>
+    ///     Gets the raw Z value as stored (float).
+    ///     This is internal to support TIN serialization.
+    /// </summary>
+    internal float GetZAsFloat() => _z;
+
+    /// <summary>
     ///     Tests if this vertex contains the specified vertex.
     ///     For regular vertices, this tests for equality.
     /// </summary>

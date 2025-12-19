@@ -577,4 +577,50 @@ public class QuadEdge : IQuadEdge
         startPoint = a.IsNullVertex() ? new Vector2(float.NaN, float.NaN) : new Vector2((float)a.X, (float)a.Y);
         endPoint = b.IsNullVertex() ? new Vector2(float.NaN, float.NaN) : new Vector2((float)b.X, (float)b.Y);
     }
+
+    #region Serialization Support
+
+    /// <summary>
+    ///     Gets the forward link as a QuadEdge (for serialization).
+    /// </summary>
+    internal QuadEdge? GetForwardInternal() => _f;
+
+    /// <summary>
+    ///     Gets the reverse link as a QuadEdge (for serialization).
+    /// </summary>
+    internal QuadEdge? GetReverseInternal() => _r;
+
+    /// <summary>
+    ///     Gets the dual/partner edge (for serialization).
+    /// </summary>
+    internal QuadEdge GetDualInternal() => _dual;
+
+    /// <summary>
+    ///     Gets the packed constraint bits from the partner edge.
+    ///     This is the raw _index field of the QuadEdgePartner which stores constraint flags.
+    /// </summary>
+    internal int GetPartnerConstraintBits() => _dual._index;
+
+    /// <summary>
+    ///     Sets the forward link directly without setting the reciprocal (for deserialization).
+    /// </summary>
+    internal void SetForwardDirect(QuadEdge? forward) => _f = forward;
+
+    /// <summary>
+    ///     Sets the reverse link directly without setting the reciprocal (for deserialization).
+    /// </summary>
+    internal void SetReverseDirect(QuadEdge? reverse) => _r = reverse;
+
+    /// <summary>
+    ///     Sets the packed constraint bits on the partner edge directly (for deserialization).
+    ///     This sets the raw _index field of the QuadEdgePartner.
+    /// </summary>
+    internal void SetPartnerConstraintBits(int bits) => _dual._index = bits;
+
+    /// <summary>
+    ///     Sets the B vertex directly on the dual (for deserialization).
+    /// </summary>
+    internal void SetBDirect(IVertex b) => _dual._v = b;
+
+    #endregion
 }
