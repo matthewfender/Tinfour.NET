@@ -788,6 +788,41 @@ public class IncrementalTin : IIncrementalTin
             if (constraintIndexForC >= 0)
                 cm.SetConstraintRegionInteriorIndex(constraintIndexForC);
         }
+        else
+        {
+            // c is a ghost vertex - this is a perimeter edge.
+            // We need to create a new ghost edge for m and link it into the ghost chain.
+            // Ghost edges connect from real vertices to the null vertex.
+            //
+            // Original setup (A→B with ghost on c-side):
+            //   Triangle ABc: edges ab→bc→ca (where bc=B→ghost, ca=ghost→A)
+            //
+            // After split we need TWO ghost triangles:
+            //   Triangle MBc: edges mb→bc→ghostM (M→B, B→ghost, ghost→M)
+            //   Triangle AMc: edges am→ghostM→ca (A→M, M→ghost, ghost→A)
+            //                 Wait, that's wrong - ca goes ghost→A, not to M
+            //
+            // Actually: After split, the edge order in each ghost triangle should be:
+            //   Triangle MBc: mb (M→B) → bc (B→ghost) → ??? (ghost→M)
+            //   Triangle AMc: am (A→M) → ??? (M→ghost) → ca (ghost→A)
+            //
+            // So we need edge M→ghost (call it ghostM) with dual ghost→M (call it mGhost)
+            // Triangle MBc: mb → bc → mGhost (where mGhost = ghost→M)
+            // Triangle AMc: am → ghostM → ca (where ghostM = M→ghost)
+
+            var ghostM = (QuadEdge)_edgePool.AllocateEdge(m, Vertex.Null);
+            var mGhost = (QuadEdge)ghostM.GetDual();
+
+            // Wire up ghost triangle MBc: M→B→ghost→M
+            mb.SetForward(bc);      // M→B followed by B→ghost
+            bc.SetForward(mGhost);  // B→ghost followed by ghost→M (completes triangle)
+            mGhost.SetForward(mb);  // ghost→M followed by M→B
+
+            // Wire up ghost triangle AMc: A→M→ghost→A
+            am.SetForward(ghostM);  // A→M followed by M→ghost
+            ghostM.SetForward(ca);  // M→ghost followed by ghost→A (completes triangle)
+            ca.SetForward(am);      // ghost→A followed by A→M
+        }
 
         // Wire up the d-side (if not ghost)
         if (!d.IsNullVertex())
@@ -805,6 +840,35 @@ public class IncrementalTin : IIncrementalTin
 
             if (constraintIndexForD >= 0)
                 dm.SetConstraintRegionInteriorIndex(constraintIndexForD);
+        }
+        else
+        {
+            // d is a ghost vertex - this is a perimeter edge.
+            // We need to create a new ghost edge for m and link it into the ghost chain.
+            //
+            // Original setup (B→A with ghost on d-side, i.e., looking from ba's perspective):
+            //   Triangle BAd: edges ba→ad→db (where ad=A→ghost, db=ghost→B)
+            //
+            // After split we need TWO ghost triangles:
+            //   Triangle MAd: edges ma→ad→??? (M→A, A→ghost, ghost→M)
+            //   Triangle BMd: edges bm→???→db (B→M, M→ghost, ghost→B)
+            //
+            // So we need edge M→ghost (call it ghostM) with dual ghost→M (call it mGhost)
+            // Triangle MAd: ma → ad → mGhost (where mGhost = ghost→M)
+            // Triangle BMd: bm → ghostM → db (where ghostM = M→ghost)
+
+            var ghostM = (QuadEdge)_edgePool.AllocateEdge(m, Vertex.Null);
+            var mGhost = (QuadEdge)ghostM.GetDual();
+
+            // Wire up ghost triangle MAd: M→A→ghost→M
+            ma.SetForward(ad);      // M→A followed by A→ghost
+            ad.SetForward(mGhost);  // A→ghost followed by ghost→M (completes triangle)
+            mGhost.SetForward(ma);  // ghost→M followed by M→A
+
+            // Wire up ghost triangle BMd: B→M→ghost→B
+            bm.SetForward(ghostM);  // B→M followed by M→ghost
+            ghostM.SetForward(db);  // M→ghost followed by ghost→B (completes triangle)
+            db.SetForward(bm);      // ghost→B followed by B→M
         }
 
         _vertexCount++;
