@@ -640,4 +640,78 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
         if (_isDisposed) throw new ObjectDisposedException(nameof(EdgePool));
     }
 
+    #region Serialization Support
+
+    /// <summary>
+    ///     Gets all allocated edges as QuadEdge instances in allocation order (for serialization).
+    ///     Edges are returned in order of their base indices: 0, 2, 4, ...
+    /// </summary>
+    internal IEnumerable<QuadEdge> GetAllocatedEdgesInOrder()
+    {
+        foreach (var page in _pages)
+        {
+            for (var i = 0; i < page.NAllocated; i++)
+            {
+                yield return page.GetEdge(i);
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Gets the number of allocated edges (for serialization).
+    /// </summary>
+    internal int GetAllocatedCount() => _nAllocated;
+
+    /// <summary>
+    ///     Pre-allocates the specified number of edges for deserialization.
+    ///     After calling this, the edges will have sequential base indices (0, 2, 4, ...).
+    /// </summary>
+    /// <param name="count">Number of edges to allocate</param>
+    /// <returns>Array of allocated edges in order</returns>
+    internal QuadEdge[] AllocateEdgesForDeserialization(int count)
+    {
+        ThrowIfDisposed();
+
+        // Ensure we have enough pages
+        PreAllocateEdges(count);
+
+        var edges = new QuadEdge[count];
+        for (var i = 0; i < count; i++)
+        {
+            var edge = (QuadEdge)AllocateUndefinedEdge();
+            edges[i] = edge;
+        }
+
+        return edges;
+    }
+
+    /// <summary>
+    ///     Gets an edge by its base index (for deserialization link resolution).
+    ///     The base index must be an even number (0, 2, 4, ...).
+    /// </summary>
+    /// <param name="baseIndex">The base index of the edge (must be even)</param>
+    /// <returns>The edge at the specified index, or null if out of range</returns>
+    internal QuadEdge? GetEdgeByBaseIndex(int baseIndex)
+    {
+        if (baseIndex < 0 || (baseIndex & 1) != 0) return null;
+
+        var pageIndex = baseIndex / _pageSize2;
+        var positionInPage = baseIndex % _pageSize2 / 2;
+
+        if (pageIndex >= _pages.Length) return null;
+        var page = _pages[pageIndex];
+        if (positionInPage >= page.NAllocated) return null;
+
+        return page.GetEdge(positionInPage);
+    }
+
+    /// <summary>
+    ///     Adds a mapping from edge index to linear constraint (for deserialization).
+    /// </summary>
+    internal void AddLinearConstraintMapping(int edgeIndex, IConstraint constraint)
+    {
+        _linearConstraintMap[edgeIndex] = constraint;
+    }
+
+    #endregion
 }

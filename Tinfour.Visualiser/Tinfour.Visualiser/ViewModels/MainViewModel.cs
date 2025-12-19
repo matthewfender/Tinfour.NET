@@ -38,6 +38,7 @@ using CommunityToolkit.Mvvm.Input;
 using Tinfour.Core.Common;
 using Tinfour.Core.Interpolation;
 using Tinfour.Core.Refinement;
+using Tinfour.Core.Serialization;
 using Tinfour.Core.Standard;
 using Tinfour.Core.Utils;
 using Tinfour.Visualiser.Services;
@@ -746,6 +747,163 @@ public partial class MainViewModel : ViewModelBase
         catch (Exception ex)
         {
             this.StatusText = $"❌ Error loading vertices: {ex.Message}";
+        }
+        finally
+        {
+            this.IsGenerating = false;
+        }
+    }
+
+    [RelayCommand]
+    private async Task SaveTinAsync()
+    {
+        if (this.IsGenerating) return;
+
+        if (this.Triangulation == null || !this.Triangulation.IsBootstrapped())
+        {
+            this.StatusText = "❌ Error: No triangulation to save.";
+            return;
+        }
+
+        try
+        {
+            this.IsGenerating = true;
+            this.StatusText = "Saving TIN to file...";
+
+            // Get top-level window for file dialog
+            var topLevel = this.GetTopLevel();
+            if (topLevel == null)
+            {
+                this.StatusText = "❌ Error: Could not get application window for file dialog.";
+                return;
+            }
+
+            // Open file save dialog
+            var file = await topLevel.StorageProvider.SaveFilePickerAsync(
+                new FilePickerSaveOptions
+                {
+                    Title = "Save TIN File",
+                    DefaultExtension = "tin",
+                    SuggestedFileName = "triangulation.tin",
+                    FileTypeChoices = new List<FilePickerFileType>
+                    {
+                        new("TIN Files (*.tin)") { Patterns = new[] { "*.tin" } },
+                        new("Compressed TIN Files (*.tin.gz)") { Patterns = new[] { "*.tin.gz" } },
+                        new("All Files (*.*)") { Patterns = new[] { "*.*" } }
+                    }
+                });
+
+            if (file == null)
+            {
+                this.StatusText = "TIN file save cancelled.";
+                return;
+            }
+
+            this.StatusText = $"Saving TIN to {file.Name}...";
+
+            // Determine if compression should be used based on file extension
+            var useCompression = file.Name.EndsWith(".gz", StringComparison.OrdinalIgnoreCase);
+
+            await using var stream = await file.OpenWriteAsync();
+            await Task.Run(() => TinSerializer.Write(this.Triangulation, stream, useCompression));
+
+            this.StatusText = $"✅ TIN saved to {file.Name}";
+        }
+        catch (Exception ex)
+        {
+            this.StatusText = $"❌ Error saving TIN: {ex.Message}";
+        }
+        finally
+        {
+            this.IsGenerating = false;
+        }
+    }
+
+    [RelayCommand]
+    private async Task LoadTinAsync()
+    {
+        if (this.IsGenerating) return;
+
+        try
+        {
+            this.IsGenerating = true;
+            this.StatusText = "Loading TIN from file...";
+
+            // Get top-level window for file dialog
+            var topLevel = this.GetTopLevel();
+            if (topLevel == null)
+            {
+                this.StatusText = "❌ Error: Could not get application window for file dialog.";
+                return;
+            }
+
+            // Open file picker
+            var files = await topLevel.StorageProvider.OpenFilePickerAsync(
+                new FilePickerOpenOptions
+                {
+                    Title = "Load TIN File",
+                    AllowMultiple = false,
+                    FileTypeFilter = new List<FilePickerFileType>
+                    {
+                        new("TIN Files (*.tin, *.tin.gz)") { Patterns = new[] { "*.tin", "*.tin.gz" } },
+                        new("All Files (*.*)") { Patterns = new[] { "*.*" } }
+                    }
+                });
+
+            if (files == null || !files.Any())
+            {
+                this.StatusText = "TIN file loading cancelled.";
+                return;
+            }
+
+            var file = files.First();
+            this.StatusText = $"Loading TIN from {file.Name}...";
+
+            IncrementalTin? loadedTin = null;
+
+            await using var stream = await file.OpenReadAsync();
+            loadedTin = await Task.Run(() => (IncrementalTin)TinSerializer.Read(stream));
+
+            if (loadedTin == null)
+            {
+                this.StatusText = "❌ Error: Failed to load TIN from file.";
+                return;
+            }
+
+            // Clear existing state and set the loaded TIN
+            this.ContourResult = null;
+            this.InterpolationResult = null;
+            this.VoronoiResult = null;
+
+            this.Triangulation = loadedTin;
+
+            // Create triangulation result
+            this.TriangulationResult = new TriangulationResult
+            {
+                Tin = loadedTin,
+                VertexCount = loadedTin.GetVertices().Count,
+                EdgeCount = loadedTin.GetEdges().Count,
+                TriangleCount = loadedTin.CountTriangles(),
+                GenerationTime = TimeSpan.Zero,
+                Bounds = loadedTin.GetBounds()
+            };
+
+            // Use a coordinate system suitable for loaded data (assume WebMercator for now)
+            this.CoordinateSystem = TransformationType.WebMercator;
+
+            // Request reset view to ensure proper display
+            MessageBus.RequestResetView();
+
+            var constraintCount = loadedTin.GetConstraints().Count;
+            var constraintInfo = constraintCount > 0 ? $", Constraints: {constraintCount}" : "";
+            this.StatusText = $"✅ TIN loaded from {file.Name}\n" +
+                             $"Vertices: {this.TriangulationResult.VertexCount:N0}\n" +
+                             $"Triangles: {this.TriangulationResult.TriangleCount.ValidTriangles:N0}\n" +
+                             $"Edges: {this.TriangulationResult.EdgeCount:N0}{constraintInfo}";
+        }
+        catch (Exception ex)
+        {
+            this.StatusText = $"❌ Error loading TIN: {ex.Message}";
         }
         finally
         {

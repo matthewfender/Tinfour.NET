@@ -137,6 +137,13 @@
                                     <TextBlock Text="Format: latitude,longitude,depth" FontSize="11" Foreground="Yellow" Margin="5,0,0,5" TextWrapping="Wrap" />
                                     <Button Content="Load Constraints" Command="{Binding LoadConstraintsCommand}" IsEnabled="{Binding !IsGenerating}" />
                                     <TextBlock Text="Format: [index,]latitude,longitude (polygons)" FontSize="11" Foreground="Yellow" Margin="5,0,0,5" TextWrapping="Wrap" />
+
+                                    <TextBlock Text="TIN Files" Classes="Header" />
+                                    <StackPanel Orientation="Horizontal" Spacing="5">
+                                        <Button Content="Save TIN" Command="{Binding SaveTinCommand}" IsEnabled="{Binding !IsGenerating}" />
+                                        <Button Content="Load TIN" Command="{Binding LoadTinCommand}" IsEnabled="{Binding !IsGenerating}" />
+                                    </StackPanel>
+                                    <TextBlock Text="Save/load complete triangulation state (.tin or .tin.gz)" FontSize="11" Foreground="Yellow" Margin="5,0,0,5" TextWrapping="Wrap" />
                                 </StackPanel>
                             </Border>
                         </StackPanel>
