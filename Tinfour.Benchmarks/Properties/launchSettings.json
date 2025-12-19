@@ -2,7 +2,7 @@
   "profiles": {
     "Tinfour.Benchmarks": {
       "commandName": "Project",
-      "commandLineArgs": "raster"
+      "commandLineArgs": "refinement-interp"
     }
   }
 }

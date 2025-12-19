@@ -43,6 +43,14 @@ public interface IIncrementalTin : IDisposable
     bool Add(IVertex v);
 
     /// <summary>
+    ///     Adds a vertex to the TIN and returns an edge connected to the inserted vertex.
+    ///     This is useful for avoiding redundant point location after insertion.
+    /// </summary>
+    /// <param name="v">The vertex to be added.</param>
+    /// <returns>An edge with A == v, or null if the TIN is not bootstrapped or vertex was merged.</returns>
+    IQuadEdge? AddAndReturnEdge(IVertex v);
+
+    /// <summary>
     ///     Adds a list of vertices to the TIN.
     /// </summary>
     /// <param name="vertices">A valid list of vertices.</param>

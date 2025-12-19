@@ -15,4 +15,10 @@
   <ItemGroup>
     <ProjectReference Include="..\Tinfour.Core\Tinfour.Core.csproj" />
   </ItemGroup>
+
+  <!-- Real-world test data files from Visualiser -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\Tinfour.Visualiser\Tinfour.Visualiser\Assets\TestFiles\AllAmLakeTrackPointsCSV.csv" Link="TestData\AllAmLakeTrackPointsCSV.csv" />
+    <EmbeddedResource Include="..\Tinfour.Visualiser\Tinfour.Visualiser\Assets\TestFiles\AMLakeShorelines.csv" Link="TestData\AMLakeShorelines.csv" />
+  </ItemGroup>
 </Project>
