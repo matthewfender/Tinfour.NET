@@ -717,14 +717,31 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
             return double.NaN;
 
         double zSum = 0;
+        double wSum = 0;
         var k = 0;
         foreach (var s in eList)
         {
-            var z = vq.Value(s.GetA());
-            zSum += w[k++] * z;
+            var v = s.GetA();
+            var z = vq.Value(v);
+            
+            // If the vertex has a NaN Z value (e.g. a constraint vertex with no elevation),
+            // we skip it in the weighted sum. This effectively treats it as "missing data"
+            // and interpolates from the remaining valid neighbors.
+            if (!double.IsNaN(z))
+            {
+                var weight = w[k];
+                zSum += weight * z;
+                wSum += weight;
+            }
+            k++;
         }
 
-        return zSum;
+        // If all neighbors were NaN, we can't interpolate
+        if (wSum == 0) return double.NaN;
+
+        // Normalize the result if we skipped any weights
+        // (Sibson weights sum to 1.0, so if we skip some, wSum < 1.0)
+        return zSum / wSum;
     }
 
     /// <summary>

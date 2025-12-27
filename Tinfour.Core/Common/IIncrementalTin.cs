@@ -71,7 +71,8 @@ public interface IIncrementalTin : IDisposable
     /// </summary>
     /// <param name="constraints">A valid list of constraints.</param>
     /// <param name="restoreConformity">Indicates whether to restore Delaunay conformity.</param>
-    void AddConstraints(IList<IConstraint> constraints, bool restoreConformity);
+    /// <param name="preInterpolateZ">Indicates whether to pre-interpolate Z values for constraint vertices.</param>
+    void AddConstraints(IList<IConstraint> constraints, bool restoreConformity, bool preInterpolateZ = false);
 
     /// <summary>
     ///     Adds a list of vertices pre-sorted by Hilbert curve.

@@ -120,6 +120,7 @@
                                         <Button Content="Add Donut Constraint" Command="{Binding GenerateConstrainedTestCommand}" IsEnabled="{Binding !IsGenerating}" />
                                         <Button HorizontalAlignment="Right" Content="Clear" Command="{Binding ClearTriangulationCommand}" IsEnabled="{Binding !IsGenerating}" />
                                     </StackPanel>
+                                    <CheckBox Content="Pre-interpolate Z" IsChecked="{Binding PreInterpolateConstraints}" Margin="0,5,0,0" ToolTip.Tip="Interpolate Z values for constraints from existing TIN" />
                                     <CheckBox Content="Use Triangle Collector (constrained triangles only)" IsChecked="{Binding UseTriangleCollector}" Margin="0,5,0,0" />
                                     <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,3,0,0">
                                         <TextBlock Grid.Column="0" Text="Points:" VerticalAlignment="Center" Margin="0,0,5,0" />

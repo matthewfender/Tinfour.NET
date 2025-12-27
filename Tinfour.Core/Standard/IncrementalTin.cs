@@ -274,7 +274,12 @@ public class IncrementalTin : IIncrementalTin
     /// </summary>
     /// <param name="constraints">The constraints to add</param>
     /// <param name="restoreConformity">Whether to restore Delaunay conformity</param>
-    public void AddConstraints(IList<IConstraint> constraints, bool restoreConformity)
+    /// <param name="preInterpolateZ">
+    ///     If true, any constraint vertices with NaN Z values will be populated
+    ///     by interpolating from the existing TIN using Triangular Facet Interpolation
+    ///     before insertion.
+    /// </param>
+    public void AddConstraints(IList<IConstraint> constraints, bool restoreConformity, bool preInterpolateZ = false)
     {
         if (_isDisposed) throw new InvalidOperationException("Unable to add constraints after disposal");
 
@@ -309,9 +314,62 @@ public class IncrementalTin : IIncrementalTin
         var polygonConstraints = new List<IConstraint>();
         var linearConstraints = new List<IConstraint>();
 
+        // Setup interpolator if needed
+        TriangularFacetInterpolator? interpolator = null;
+        if (preInterpolateZ)
+        {
+            interpolator = new TriangularFacetInterpolator(this);
+        }
+
         foreach (var cIn in constraints)
         {
             var c = cIn;
+
+            // Pre-interpolate Z values if requested
+            if (preInterpolateZ && interpolator != null)
+            {
+                var vertices = c.GetVertices();
+                var needsUpdate = false;
+                foreach (var v in vertices)
+                {
+                    if (double.IsNaN(v.GetZ()))
+                    {
+                        needsUpdate = true;
+                        break;
+                    }
+                }
+
+                if (needsUpdate)
+                {
+                    var newVertices = new List<IVertex>(vertices.Count);
+                    foreach (var v in vertices)
+                    {
+                        if (double.IsNaN(v.GetZ()))
+                        {
+                            var z = interpolator.Interpolate(v.X, v.Y, null);
+                            // If interpolation succeeds, use the value. Otherwise keep NaN.
+                            if (!double.IsNaN(z))
+                            {
+                                // Create new vertex with interpolated Z, preserving other attributes if possible
+                                // Note: We lose auxiliary/status bits here if we just use new Vertex(...)
+                                // But usually constraint vertices are fresh.
+                                // Let's try to preserve index.
+                                newVertices.Add(new Vertex(v.X, v.Y, z, v.GetIndex()));
+                            }
+                            else
+                            {
+                                newVertices.Add(v);
+                            }
+                        }
+                        else
+                        {
+                            newVertices.Add(v);
+                        }
+                    }
+                    c = c.GetConstraintWithNewGeometry(newVertices);
+                }
+            }
+
             c.Complete();
 
             var anyRedundant = false;
