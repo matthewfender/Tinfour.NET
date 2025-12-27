@@ -96,6 +96,7 @@ public class RuppertRefiner : IDelaunayRefiner
     private readonly bool _ignoreSeditiousEncroachments;
     private readonly bool _interpolateZ;
     private readonly bool _refineOnlyInsideConstraints;
+    private readonly bool _hasConstraints;  // Cached flag to avoid GetConstraints() call in hot path
 
     // Vertex metadata tracking
     private readonly Dictionary<IVertex, VData> _vdata;
@@ -138,12 +139,13 @@ public class RuppertRefiner : IDelaunayRefiner
 
     /// <summary>
     ///     Metadata for each vertex in the TIN.
+    ///     Implemented as a readonly struct to avoid heap allocations.
     /// </summary>
-    private sealed class VData
+    private readonly struct VData
     {
-        public VType Type { get; }
-        public IVertex? Corner { get; }
-        public int Shell { get; }
+        public readonly VType Type;
+        public readonly IVertex? Corner;
+        public readonly int Shell;
 
         public VData(VType type, IVertex? corner, int shell)
         {
@@ -155,10 +157,16 @@ public class RuppertRefiner : IDelaunayRefiner
 
     /// <summary>
     ///     Corner angle information for seditious edge detection.
+    ///     Implemented as a readonly struct to avoid heap allocations.
     /// </summary>
-    private sealed class CornerInfo
+    private readonly struct CornerInfo
     {
-        public double MinAngleDeg { get; set; } = 180.0;
+        public readonly double MinAngleDeg;
+
+        public CornerInfo(double minAngleDeg)
+        {
+            MinAngleDeg = minAngleDeg;
+        }
     }
 
     /// <summary>
@@ -286,6 +294,9 @@ public class RuppertRefiner : IDelaunayRefiner
         {
             AddBoundingBoxConstraint(tin, options.BoundingBoxBufferPercent);
         }
+
+        // Cache whether the TIN has constraints to avoid GetConstraints() call in hot path
+        _hasConstraints = tin.GetConstraints().Count > 0;
 
         // Initialize collections with reference equality comparison for edges
         _vdata = new Dictionary<IVertex, VData>(ReferenceEqualityComparer.Instance);
@@ -490,18 +501,19 @@ public class RuppertRefiner : IDelaunayRefiner
             if (list.Count < 2)
                 continue;
 
-            var ci = new CornerInfo();
             var angs = list.Select(w => Math.Atan2(w.Y - z.Y, w.X - z.X)).ToList();
 
+            // Compute minimum angle first, then create the struct
+            var minAngle = 180.0;
             for (var i = 0; i < angs.Count; i++)
             {
                 for (var j = i + 1; j < angs.Count; j++)
                 {
                     var angle = AngleSmallBetweenDeg(angs[i], angs[j]);
-                    ci.MinAngleDeg = Math.Min(ci.MinAngleDeg, angle);
+                    minAngle = Math.Min(minAngle, angle);
                 }
             }
-            info[z] = ci;
+            info[z] = new CornerInfo(minAngle);
         }
 
         return info;
@@ -652,20 +664,15 @@ public class RuppertRefiner : IDelaunayRefiner
 
         // When RefineOnlyInsideConstraints is true (default), only refine triangles
         // that are inside a constraint region. When false, refine all triangles.
-        if (_refineOnlyInsideConstraints)
+        if (_refineOnlyInsideConstraints && _hasConstraints)
         {
-            var constraints = _tin.GetConstraints();
+            // Check if triangle is inside a constraint region by verifying edge membership
+            var eA = t.GetEdgeA();
+            var eB = t.GetEdgeB();
+            var eC = t.GetEdgeC();
 
-            if (constraints.Count >= 1)
-            {
-                // Check if triangle is inside a constraint region by verifying edge membership
-                var eA = t.GetEdgeA();
-                var eB = t.GetEdgeB();
-                var eC = t.GetEdgeC();
-
-                if (!eA.IsConstraintRegionMember() || !eB.IsConstraintRegionMember() || !eC.IsConstraintRegionMember())
-                    return 0.0;
-            }
+            if (!eA.IsConstraintRegionMember() || !eB.IsConstraintRegionMember() || !eC.IsConstraintRegionMember())
+                return 0.0;
         }
 
         var a = t.GetVertexA();
@@ -712,6 +719,92 @@ public class RuppertRefiner : IDelaunayRefiner
             pairProd = la * lb;
             sA = c;
             sB = a;
+        }
+
+        var threshMul = 4.0 * _rhoMin * _rhoMin;
+        var minCross2 = 4.0 * _minTriangleArea * _minTriangleArea;
+
+        // Bad if (R/s) >= rhoMin <=> pairProd >= 4*rhoMin^2 * cross^2
+        if (pairProd < threshMul * cross2)
+            return 0.0; // Triangle meets angle criterion - not bad
+
+        if (_skipSeditiousTriangles && IsSeditious(sA, sB))
+            return 0.0;
+
+        // Area must exceed threshold
+        if (cross2 <= minCross2)
+            return 0.0;
+
+        return cross2;
+    }
+
+    /// <summary>
+    ///     Computes the bad triangle priority directly from an edge, avoiding SimpleTriangle allocation.
+    ///     This is equivalent to TriangleBadPriority(new SimpleTriangle(e)) but more efficient.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private double TriangleBadPriorityFromEdge(IQuadEdge eA)
+    {
+        var eB = eA.GetForward();
+        var eC = eA.GetReverse();
+
+        // IsGhost check: any vertex is null
+        var vA = eC.GetA(); // VertexA is eC.GetA()
+        var vB = eA.GetA(); // VertexB is eA.GetA()
+        var vC = eB.GetA(); // VertexC is eB.GetA()
+
+        if (vA.IsNullVertex() || vB.IsNullVertex() || vC.IsNullVertex())
+            return 0.0;
+
+        // When RefineOnlyInsideConstraints is true (default), only refine triangles
+        // that are inside a constraint region. When false, refine all triangles.
+        if (_refineOnlyInsideConstraints && _hasConstraints)
+        {
+            // Check if triangle is inside a constraint region by verifying edge membership
+            if (!eA.IsConstraintRegionMember() || !eB.IsConstraintRegionMember() || !eC.IsConstraintRegionMember())
+                return 0.0;
+        }
+
+        var ax = vA.X; var ay = vA.Y;
+        var bx = vB.X; var by = vB.Y;
+        var cx = vC.X; var cy = vC.Y;
+
+        // AB, AC vectors
+        var abx = bx - ax; var aby = by - ay;
+        var acx = cx - ax; var acy = cy - ay;
+
+        // |AB|^2, |AC|^2, |BC|^2
+        var la = abx * abx + aby * aby;
+        var lc = acx * acx + acy * acy;
+        var dot = abx * acx + aby * acy;
+        var lb = la + lc - 2.0 * dot;
+
+        // cross^2 (double-area squared)
+        var cross = abx * acy - aby * acx;
+        var cross2 = cross * cross;
+        if (cross2 <= 0.0)
+            return 0.0;
+
+        // Find shortest edge and product of other two squared sides
+        double pairProd;
+        IVertex sA, sB;
+        if (la <= lb && la <= lc)
+        {
+            pairProd = lb * lc;
+            sA = vA;
+            sB = vB;
+        }
+        else if (lb <= la && lb <= lc)
+        {
+            pairProd = la * lc;
+            sA = vB;
+            sB = vC;
+        }
+        else
+        {
+            pairProd = la * lb;
+            sA = vC;
+            sB = vA;
         }
 
         var threshMul = 4.0 * _rhoMin * _rhoMin;
@@ -810,22 +903,43 @@ public class RuppertRefiner : IDelaunayRefiner
         if (tri == null)
             return null;
 
-        var edges = new[] { tri.GetEdgeA(), tri.GetEdgeB(), tri.GetEdgeC() };
+        // Inline edge checks to avoid array allocation
+        var eA = tri.GetEdgeA();
+        var eB = tri.GetEdgeB();
+        var eC = tri.GetEdgeC();
 
-        foreach (var e in edges)
-        {
-            if (CheckEdge(e, p))
-                return e.GetBaseReference();
+        // Check edge A and its neighbors
+        if (CheckEdge(eA, p))
+            return eA.GetBaseReference();
+        var dualA = eA.GetDual();
+        var n1A = dualA.GetForward();
+        if (CheckEdge(n1A, p))
+            return n1A.GetBaseReference();
+        var n2A = n1A.GetForward();
+        if (CheckEdge(n2A, p))
+            return n2A.GetBaseReference();
 
-            var dual = e.GetDual();
-            var n1 = dual.GetForward();
-            if (CheckEdge(n1, p))
-                return n1.GetBaseReference();
+        // Check edge B and its neighbors
+        if (CheckEdge(eB, p))
+            return eB.GetBaseReference();
+        var dualB = eB.GetDual();
+        var n1B = dualB.GetForward();
+        if (CheckEdge(n1B, p))
+            return n1B.GetBaseReference();
+        var n2B = n1B.GetForward();
+        if (CheckEdge(n2B, p))
+            return n2B.GetBaseReference();
 
-            var n2 = n1.GetForward();
-            if (CheckEdge(n2, p))
-                return n2.GetBaseReference();
-        }
+        // Check edge C and its neighbors
+        if (CheckEdge(eC, p))
+            return eC.GetBaseReference();
+        var dualC = eC.GetDual();
+        var n1C = dualC.GetForward();
+        if (CheckEdge(n1C, p))
+            return n1C.GetBaseReference();
+        var n2C = n1C.GetForward();
+        if (CheckEdge(n2C, p))
+            return n2C.GetBaseReference();
 
         return null;
     }
@@ -858,13 +972,19 @@ public class RuppertRefiner : IDelaunayRefiner
         if (tri == null)
             return null;
 
-        var edges = new[] { tri.GetEdgeA(), tri.GetEdgeB(), tri.GetEdgeC() };
+        // Inline edge checks to avoid array allocation
+        var eA = tri.GetEdgeA();
+        if (eA.IsConstrained() && IsNearEdgeInterior(eA, v, tol))
+            return eA;
 
-        foreach (var e in edges)
-        {
-            if (e.IsConstrained() && IsNearEdgeInterior(e, v, tol))
-                return e;
-        }
+        var eB = tri.GetEdgeB();
+        if (eB.IsConstrained() && IsNearEdgeInterior(eB, v, tol))
+            return eB;
+
+        var eC = tri.GetEdgeC();
+        if (eC.IsConstrained() && IsNearEdgeInterior(eC, v, tol))
+            return eC;
+
         return null;
     }
 
@@ -1111,40 +1231,63 @@ public class RuppertRefiner : IDelaunayRefiner
 
     private void AddVertex(IVertex v, VType type, IVertex? corner, int shell)
     {
-        _tin.Add(v);
+        // Use AddAndReturnEdge to get an edge connected to v, avoiding redundant point location
+        var insertedEdge = _tin.AddAndReturnEdge(v);
         _lastInsertedVertex = v;
         _vdata[v] = new VData(type, corner, shell);
 
-        // Check for new encroachments
-        var t0 = _navigator.GetContainingTriangle(v.X, v.Y);
-        if (t0 != null)
+        // If we got an edge back, use it directly for pinwheel traversal
+        if (insertedEdge != null)
         {
-            IQuadEdge? seed = null;
-            if (ReferenceEquals(t0.GetVertexA(), v))
-                seed = t0.GetEdgeA();
-            else if (ReferenceEquals(t0.GetVertexB(), v))
-                seed = t0.GetEdgeB();
-            else if (ReferenceEquals(t0.GetVertexC(), v))
-                seed = t0.GetEdgeC();
-
-            if (seed != null)
+            // The returned edge has A == v, so we can use it directly as the seed
+            var pinwheelCount = 0;
+            const int maxPinwheel = 1000;
+            foreach (var e in insertedEdge.GetPinwheel())
             {
-                var pinwheelCount = 0;
-                const int maxPinwheel = 1000;
-                foreach (var e in seed.GetPinwheel())
-                {
-                    if (++pinwheelCount > maxPinwheel)
-                        break;
+                if (++pinwheelCount > maxPinwheel)
+                    break;
 
-                    var opposite = e.GetForward();
-                    if (opposite.IsConstrained() && ClosestEncroacherOrNull(opposite) != null)
-                        AddEncroachmentCandidate(opposite);
+                var opposite = e.GetForward();
+                if (opposite.IsConstrained() && ClosestEncroacherOrNull(opposite) != null)
+                    AddEncroachmentCandidate(opposite);
+            }
+
+            if (_badTrianglesInitialized)
+                UpdateBadTrianglesAroundVertexFromEdge(v, insertedEdge);
+        }
+        else
+        {
+            // Fallback: edge not available (e.g., pre-bootstrap), use navigator
+            var t0 = _navigator.GetContainingTriangle(v.X, v.Y);
+            if (t0 != null)
+            {
+                IQuadEdge? seed = null;
+                if (ReferenceEquals(t0.GetVertexA(), v))
+                    seed = t0.GetEdgeA();
+                else if (ReferenceEquals(t0.GetVertexB(), v))
+                    seed = t0.GetEdgeB();
+                else if (ReferenceEquals(t0.GetVertexC(), v))
+                    seed = t0.GetEdgeC();
+
+                if (seed != null)
+                {
+                    var pinwheelCount = 0;
+                    const int maxPinwheel = 1000;
+                    foreach (var e in seed.GetPinwheel())
+                    {
+                        if (++pinwheelCount > maxPinwheel)
+                            break;
+
+                        var opposite = e.GetForward();
+                        if (opposite.IsConstrained() && ClosestEncroacherOrNull(opposite) != null)
+                            AddEncroachmentCandidate(opposite);
+                    }
                 }
             }
-        }
 
-        if (_badTrianglesInitialized)
-            UpdateBadTrianglesAroundVertex(v, t0);
+            if (_badTrianglesInitialized)
+                UpdateBadTrianglesAroundVertex(v, t0);
+        }
     }
 
     private void UpdateBadTrianglesAroundVertex(IVertex v, SimpleTriangle? s)
@@ -1153,26 +1296,8 @@ public class RuppertRefiner : IDelaunayRefiner
         if (t0 == null)
             return;
 
-        var triEdges = new[] { t0.GetEdgeA(), t0.GetEdgeB(), t0.GetEdgeC() };
-        IQuadEdge? seed = null;
-
-        foreach (var e in triEdges)
-        {
-            if (ReferenceEquals(e.GetA(), v))
-            {
-                seed = e;
-                break;
-            }
-            if (ReferenceEquals(e.GetB(), v))
-            {
-                var d = e.GetDual();
-                if (ReferenceEquals(d.GetA(), v))
-                {
-                    seed = d;
-                    break;
-                }
-            }
-        }
+        // Inline edge checks to avoid array allocation
+        var seed = FindSeedEdgeForVertex(t0, v);
 
         if (seed == null)
         {
@@ -1200,11 +1325,74 @@ public class RuppertRefiner : IDelaunayRefiner
             if (++pinwheelCount > maxPinwheel)
                 break;
 
-            var t = new SimpleTriangle(e);
-            var p = TriangleBadPriority(t);
+            // Use edge-based method to avoid SimpleTriangle allocation
+            var p = TriangleBadPriorityFromEdge(e);
             if (p > 0.0)
                 EnqueueBadTriangle(e, p);
         }
+    }
+
+    /// <summary>
+    ///     Updates bad triangles around a vertex using a known edge connected to the vertex.
+    ///     This avoids redundant point location when the edge is already known.
+    /// </summary>
+    private void UpdateBadTrianglesAroundVertexFromEdge(IVertex v, IQuadEdge seed)
+    {
+        var pinwheelCount = 0;
+        const int maxPinwheel = 1000; // Safety limit
+        foreach (var e in seed.GetPinwheel())
+        {
+            if (++pinwheelCount > maxPinwheel)
+                break;
+
+            // Use edge-based method to avoid SimpleTriangle allocation
+            var p = TriangleBadPriorityFromEdge(e);
+            if (p > 0.0)
+                EnqueueBadTriangle(e, p);
+        }
+    }
+
+    /// <summary>
+    ///     Finds the seed edge for pinwheel traversal around a vertex.
+    ///     Inlined to avoid array allocation.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static IQuadEdge? FindSeedEdgeForVertex(SimpleTriangle t0, IVertex v)
+    {
+        // Check edge A
+        var eA = t0.GetEdgeA();
+        if (ReferenceEquals(eA.GetA(), v))
+            return eA;
+        if (ReferenceEquals(eA.GetB(), v))
+        {
+            var dA = eA.GetDual();
+            if (ReferenceEquals(dA.GetA(), v))
+                return dA;
+        }
+
+        // Check edge B
+        var eB = t0.GetEdgeB();
+        if (ReferenceEquals(eB.GetA(), v))
+            return eB;
+        if (ReferenceEquals(eB.GetB(), v))
+        {
+            var dB = eB.GetDual();
+            if (ReferenceEquals(dB.GetA(), v))
+                return dB;
+        }
+
+        // Check edge C
+        var eC = t0.GetEdgeC();
+        if (ReferenceEquals(eC.GetA(), v))
+            return eC;
+        if (ReferenceEquals(eC.GetB(), v))
+        {
+            var dC = eC.GetDual();
+            if (ReferenceEquals(dC.GetA(), v))
+                return dC;
+        }
+
+        return null;
     }
 
     private void UpdateConstrainedSegmentsAroundVertex(IVertex v)
@@ -1213,26 +1401,8 @@ public class RuppertRefiner : IDelaunayRefiner
         if (t0 == null)
             return;
 
-        var triEdges = new[] { t0.GetEdgeA(), t0.GetEdgeB(), t0.GetEdgeC() };
-        IQuadEdge? seed = null;
-
-        foreach (var e in triEdges)
-        {
-            if (ReferenceEquals(e.GetA(), v))
-            {
-                seed = e;
-                break;
-            }
-            if (ReferenceEquals(e.GetB(), v))
-            {
-                var d = e.GetDual();
-                if (ReferenceEquals(d.GetA(), v))
-                {
-                    seed = d;
-                    break;
-                }
-            }
-        }
+        // Use shared helper to avoid array allocation
+        var seed = FindSeedEdgeForVertex(t0, v);
 
         if (seed == null)
         {

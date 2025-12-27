@@ -193,6 +193,32 @@ public class IncrementalTin : IIncrementalTin
     }
 
     /// <summary>
+    ///     Adds a vertex to the TIN and returns an edge connected to the inserted vertex.
+    ///     This is useful for avoiding redundant point location after insertion.
+    /// </summary>
+    /// <param name="v">The vertex to be added.</param>
+    /// <returns>An edge with A == v, or null if the TIN is not bootstrapped or vertex was merged.</returns>
+    public IQuadEdge? AddAndReturnEdge(IVertex v)
+    {
+        if (_isLocked) throw new InvalidOperationException("TIN is locked and cannot be modified.");
+
+        if (!IsBootstrapped())
+        {
+            _vertexList ??= new List<IVertex>();
+            _vertexList.Add(v);
+            _vertexCount++;
+            UpdateBounds(v);
+            TryBootstrap();
+            return null; // No edge available before bootstrap
+        }
+
+        var edge = InsertVertex(v);
+        _searchEdge = edge;
+        _vertexCount++;
+        return edge;
+    }
+
+    /// <summary>
     ///     Adds a collection of vertices to the TIN.
     /// </summary>
     /// <param name="vertices">The vertices to add</param>
