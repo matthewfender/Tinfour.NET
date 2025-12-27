@@ -382,6 +382,10 @@ public class InverseDistanceWeightingInterpolator : IInterpolatorOverTin
         foreach (var v in neighbors)
         {
             var z = val.Value(v);
+            
+            // Skip vertices with NaN Z values (e.g. constraints without elevation)
+            if (double.IsNaN(z)) continue;
+
             var dx = v.X - x;
             var dy = v.Y - y;
             var s2 = dx * dx + dy * dy;

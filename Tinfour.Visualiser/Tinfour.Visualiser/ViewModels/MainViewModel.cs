@@ -84,6 +84,9 @@ public partial class MainViewModel : ViewModelBase
     [ObservableProperty]
     private bool _isGenerating;
 
+    [ObservableProperty]
+    private bool _preInterpolateConstraints;
+
     private int _pointCount = 5;
 
     private TransformationType _selectedTransformation = TransformationType.WebMercator;
@@ -250,7 +253,8 @@ public partial class MainViewModel : ViewModelBase
                 var result = await Task.Run(() => TriangulationGenerator.AddConcentricCircleConstraints(
                                  this.Triangulation,
                                  this.TerrainWidth,
-                                 this.TerrainHeight));
+                                 this.TerrainHeight,
+                                 this.PreInterpolateConstraints));
 
                 // Update the triangulation result
                 this.TriangulationResult = result;

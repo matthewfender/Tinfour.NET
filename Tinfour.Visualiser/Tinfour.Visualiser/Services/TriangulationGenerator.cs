@@ -23,6 +23,7 @@ using System.Linq;
 
 using Tinfour.Core.Common;
 using Tinfour.Core.Diagnostics;
+using Tinfour.Core.Interpolation;
 using Tinfour.Core.Standard;
 
 /// <summary>
@@ -36,8 +37,9 @@ public class TriangulationGenerator
     /// <param name="tin">The existing triangulation to add constraints to</param>
     /// <param name="width">Width of the area (used for circle sizing)</param>
     /// <param name="height">Height of the area (used for circle sizing)</param>
+    /// <param name="preInterpolateZ">Whether to pre-interpolate Z values for the constraints</param>
     /// <returns>A result with updated constraint information</returns>
-    public static TriangulationResult AddConcentricCircleConstraints(IncrementalTin tin, double width, double height)
+    public static TriangulationResult AddConcentricCircleConstraints(IncrementalTin tin, double width, double height, bool preInterpolateZ = false)
     {
         var stopwatch = Stopwatch.StartNew();
 
@@ -73,24 +75,12 @@ public class TriangulationGenerator
 
         Debug.WriteLine($"Adding {allNewVertices.Count} circle vertices to triangulation");
 
-        // Add vertices to TIN first
-        foreach (var vertex in allNewVertices)
-            try
-            {
-                tin.Add(vertex);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error adding vertex: {ex.Message}");
-            }
-
         // Create polygon constraints for the circles
         // Outer circle is the main constraint region
         var outerCircleConstraint = new PolygonConstraint(outerCircleVertices, definesRegion: true, isHole: false);
-        outerCircleConstraint.SetDefaultZ(0.0); // Set default Z for interpolation
+        
         // Inner circle is a hole within the outer region
         var innerCircleConstraint = new PolygonConstraint(innerCircleVertices, definesRegion: true, isHole: true);
-        innerCircleConstraint.SetDefaultZ(0.0); // Set default Z for interpolation
 
         // Store all vertices for potential recovery
         var allVertices = new List<IVertex>();
@@ -118,14 +108,14 @@ public class TriangulationGenerator
         try
         {
             // Add all constraints with conformity restoration
-            tin.AddConstraints(allConstraints, true);
+            tin.AddConstraints(allConstraints, true, preInterpolateZ);
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Exception during constraint addition: {ex.Message}");
-            Debug.WriteLine($"Stack trace: {ex.StackTrace}");
+            Debug.WriteLine($"Error adding constraints: {ex.Message}");
             constraintAdditionFailed = true;
         }
+        
 
         var additionTime = stopwatch.Elapsed;
 
@@ -635,6 +625,35 @@ public class TriangulationGenerator
     }
 
     /// <summary>
+    ///     Interpolates Z values for a list of vertices using the provided interpolator.
+    /// </summary>
+    /// <param name="interpolator">The interpolator to use</param>
+    /// <param name="vertices">The vertices to interpolate</param>
+    /// <returns>A new list of vertices with interpolated Z values</returns>
+    private static List<IVertex> InterpolateVertices(IInterpolatorOverTin interpolator, List<IVertex> vertices)
+    {
+        var result = new List<IVertex>(vertices.Count);
+        
+        foreach (var v in vertices)
+        {
+            var z = interpolator.Interpolate(v.X, v.Y, null);
+            
+            // If interpolation fails (e.g. outside convex hull), default to 0.0
+            if (double.IsNaN(z))
+            {
+                z = 0.0;
+            }
+            
+            // Create a new vertex with the interpolated Z value
+            // Preserve the index if possible
+            var index = v.GetIndex();
+            result.Add(new Vertex(v.X, v.Y, z, index));
+        }
+        
+        return result;
+    }
+
+    /// <summary>
     ///     Creates vertices arranged in a circle with explicit indices.
     /// </summary>
     /// <param name="centerX">Center X coordinate</param>
@@ -665,8 +684,8 @@ public class TriangulationGenerator
                 var x = centerX + radius * Math.Cos(angle);
                 var y = centerY + radius * Math.Sin(angle);
 
-                // Set Z to 0 for constraint vertices (they're just geometric boundaries)
-                vertices.Add(new Vertex(x, y, 0.0, startingIndex + i));
+                // Set Z to NaN for constraint vertices so they can be interpolated if requested
+                vertices.Add(new Vertex(x, y, double.NaN, startingIndex + i));
             }
         else
 
@@ -677,8 +696,8 @@ public class TriangulationGenerator
                 var x = centerX + radius * Math.Cos(angle);
                 var y = centerY + radius * Math.Sin(angle);
 
-                // Set Z to 0 for constraint vertices (they're just geometric boundaries)
-                vertices.Add(new Vertex(x, y, 0.0, startingIndex + i));
+                // Set Z to NaN for constraint vertices so they can be interpolated if requested
+                vertices.Add(new Vertex(x, y, double.NaN, startingIndex + i));
             }
 
         return vertices;

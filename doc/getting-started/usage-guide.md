@@ -87,6 +87,31 @@ lakeConstraint.SetConstraintIndex(1); // Assign an index for identification
 tin.AddConstraints(new List<IConstraint> { lakeConstraint }, true);
 ```
 
+### Constraint Z-Value Interpolation
+
+When adding constraints, you can optionally request that the Z-values for the constraint vertices be interpolated from the existing TIN surface. This is useful when you have 2D constraints (e.g., building footprints) that you want to drape onto a 3D terrain.
+
+To use this feature:
+1.  Set the Z-value of your constraint vertices to `double.NaN`.
+2.  Pass `true` for the `preInterpolateZ` parameter in `AddConstraints`.
+
+```csharp
+// Create vertices with NaN Z-values
+var vertices = new List<Vertex>
+{
+    new Vertex(10, 10, double.NaN),
+    new Vertex(20, 10, double.NaN),
+    new Vertex(20, 20, double.NaN)
+};
+var constraint = new PolygonConstraint(vertices);
+
+// Add to TIN with pre-interpolation enabled
+// The TIN will use Triangular Facet Interpolation to populate the Z values
+tin.AddConstraints(new List<IConstraint> { constraint }, true, preInterpolateZ: true);
+```
+
+> **Note:** The `NaturalNeighborInterpolator` and `InverseDistanceWeightingInterpolator` have been updated to ignore vertices with `NaN` Z-values. This allows you to add "topology-only" constraints that affect the triangulation structure but do not distort the surface interpolation.
+
 ## Accessing Triangles and Edges
 
 ### Iterating Over Triangles
