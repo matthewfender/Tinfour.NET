@@ -137,6 +137,144 @@ public class PolysideTests
         this._output.WriteLine($"Expected exception: {exception.Message}");
     }
 
+    // ---------------------------------------------------------------
+    // Vertex-based overload tests
+    // ---------------------------------------------------------------
+
+    [Fact]
+    public void IsPointInPolygon_VertexOverload_PointInsideSquare_ReturnsInside()
+    {
+        // Arrange - square (0,0)-(10,0)-(10,10)-(0,10)
+        var vertices = CreateSquareVertices();
+
+        // Act
+        var result = Polyside.IsPointInPolygon(vertices, 5, 5);
+
+        // Assert
+        Assert.Equal(Polyside.Result.Inside, result);
+        this._output.WriteLine($"Point (5,5) vertex overload result: {result}");
+    }
+
+    [Fact]
+    public void IsPointInPolygon_VertexOverload_PointOutsideSquare_ReturnsOutside()
+    {
+        // Arrange
+        var vertices = CreateSquareVertices();
+
+        // Act
+        var result = Polyside.IsPointInPolygon(vertices, 15, 15);
+
+        // Assert
+        Assert.Equal(Polyside.Result.Outside, result);
+        this._output.WriteLine($"Point (15,15) vertex overload result: {result}");
+    }
+
+    [Fact]
+    public void IsPointInPolygon_VertexOverload_PointOnEdge_ReturnsEdge()
+    {
+        // Arrange
+        var vertices = CreateSquareVertices();
+
+        // Act - point on bottom edge at (5, 0)
+        var result = Polyside.IsPointInPolygon(vertices, 5, 0);
+
+        // Assert
+        Assert.Equal(Polyside.Result.Edge, result);
+        this._output.WriteLine($"Point (5,0) on edge vertex overload result: {result}");
+    }
+
+    [Fact]
+    public void IsPointInPolygon_VertexOverload_PointOnVertex_ReturnsEdge()
+    {
+        // Arrange
+        var vertices = CreateSquareVertices();
+
+        // Act - point exactly on vertex (0, 0)
+        var result = Polyside.IsPointInPolygon(vertices, 0, 0);
+
+        // Assert
+        Assert.Equal(Polyside.Result.Edge, result);
+        this._output.WriteLine($"Point (0,0) on vertex, vertex overload result: {result}");
+    }
+
+    [Fact]
+    public void IsPointInPolygon_VertexOverload_PointInsideNonConvex_ReturnsInside()
+    {
+        // Arrange - L-shaped polygon
+        //  (0,0)-(6,0)-(6,3)-(3,3)-(3,6)-(0,6)
+        var vertices = CreateLShapedVertices();
+
+        // Act - point at (1, 1) inside the L
+        var result = Polyside.IsPointInPolygon(vertices, 1, 1);
+
+        // Assert
+        Assert.Equal(Polyside.Result.Inside, result);
+        this._output.WriteLine($"Point (1,1) inside L-shape: {result}");
+    }
+
+    [Fact]
+    public void IsPointInPolygon_VertexOverload_PointInConcavity_ReturnsOutside()
+    {
+        // Arrange - L-shaped polygon
+        var vertices = CreateLShapedVertices();
+
+        // Act - point at (5, 5) in the concavity (upper-right notch)
+        var result = Polyside.IsPointInPolygon(vertices, 5, 5);
+
+        // Assert
+        Assert.Equal(Polyside.Result.Outside, result);
+        this._output.WriteLine($"Point (5,5) in L-shape concavity: {result}");
+    }
+
+    [Fact]
+    public void IsPointInPolygon_VertexOverload_FewerThanThreeVertices_ThrowsArgumentException()
+    {
+        // Arrange
+        var vertices = new List<IVertex>
+        {
+            new Vertex(0, 0, 0, 1),
+            new Vertex(1, 0, 0, 2)
+        };
+
+        // Act & Assert
+        var ex = Assert.Throws<ArgumentException>(() =>
+            Polyside.IsPointInPolygon(vertices, 0.5, 0.5));
+
+        Assert.Contains("at least three vertices", ex.Message);
+        this._output.WriteLine($"Expected exception: {ex.Message}");
+    }
+
+    /// <summary>
+    ///     Creates square vertices at (0,0), (10,0), (10,10), (0,10) for vertex-overload tests.
+    /// </summary>
+    private static IList<IVertex> CreateSquareVertices()
+    {
+        return new List<IVertex>
+        {
+            new Vertex(0, 0, 0, 1),
+            new Vertex(10, 0, 0, 2),
+            new Vertex(10, 10, 0, 3),
+            new Vertex(0, 10, 0, 4)
+        };
+    }
+
+    /// <summary>
+    ///     Creates an L-shaped (non-convex) polygon:
+    ///     (0,0)-(6,0)-(6,3)-(3,3)-(3,6)-(0,6)
+    /// </summary>
+    private static IList<IVertex> CreateLShapedVertices()
+    {
+        return new List<IVertex>
+        {
+            new Vertex(0, 0, 0, 1),
+            new Vertex(6, 0, 0, 2),
+            new Vertex(6, 3, 0, 3),
+            new Vertex(3, 3, 0, 4),
+            new Vertex(3, 6, 0, 5),
+            new Vertex(0, 6, 0, 6)
+        };
+    }
+
     /// <summary>
     ///     Creates a pentagon polygon for testing.
     /// </summary>
