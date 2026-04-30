@@ -1318,16 +1318,29 @@ public class IncrementalTin : IIncrementalTin
         // Get anchor AFTER finding nearest edge (matching Java's order)
         var anchor = searchEdge.GetA();
 
-        // Check if we're inserting inside a constraint region
-        // Match Java logic: only check searchEdge (now the nearest edge).
-        // If the nearest edge is a constraint region member, the vertex is inside.
+        // Check if we're inserting inside a constraint region.
+        // Check all 3 edges of the containing triangle, not just the nearest.
+        // Near constraint boundaries, the nearest edge may be the border edge
+        // (which is NOT interior), while the other two edges ARE interior.
+        // This prevents missed propagation when GetNearestEdgeInTriangle
+        // returns a boundary edge for a vertex that is inside the region.
         var vertexConstraintIndex = -1;
-        if (_constraintList.Count > 0 && searchEdge.IsConstraintRegionMember())
+        if (_constraintList.Count > 0)
         {
-            var con = GetRegionConstraint(searchEdge);
-            if (con != null)
+            var eA = searchEdge;
+            var eB = searchEdge.GetForward();
+            var eC = searchEdge.GetReverse();
+
+            IQuadEdge? memberEdge = null;
+            if (eA.IsConstraintRegionMember()) memberEdge = eA;
+            else if (eB.IsConstraintRegionMember()) memberEdge = eB;
+            else if (eC.IsConstraintRegionMember()) memberEdge = eC;
+
+            if (memberEdge != null)
             {
-                vertexConstraintIndex = con.GetConstraintIndex();
+                var con = GetRegionConstraint(memberEdge);
+                if (con != null)
+                    vertexConstraintIndex = con.GetConstraintIndex();
             }
         }
 
