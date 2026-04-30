@@ -122,6 +122,9 @@ public class RuppertRefiner : IDelaunayRefiner
     private double _originalMaxCoord;
     private bool _originalBoundsSet;
 
+    // Constraint polygon vertices for geometric containment checks during refinement
+    private IList<IVertex>? _constraintPolygonVertices;
+
     #endregion
 
     #region Inner Types
@@ -289,14 +292,33 @@ public class RuppertRefiner : IDelaunayRefiner
         _ignoreSeditiousEncroachments = options.IgnoreSeditiousEncroachments;
         _refineOnlyInsideConstraints = options.RefineOnlyInsideConstraints;
 
-        // Add bounding box constraint if requested
-        if (options.AddBoundingBoxConstraint)
+        // Add bounding box or convex hull constraint if requested
+        if (options.AddConvexHullConstraint)
+        {
+            AddConvexHullConstraint(tin);
+        }
+        else if (options.AddBoundingBoxConstraint)
         {
             AddBoundingBoxConstraint(tin, options.BoundingBoxBufferPercent);
         }
 
         // Cache whether the TIN has constraints to avoid GetConstraints() call in hot path
-        _hasConstraints = tin.GetConstraints().Count > 0;
+        var constraints = tin.GetConstraints();
+        _hasConstraints = constraints.Count > 0;
+        // Cache the first polygon constraint's vertices for geometric containment checks.
+        // This prevents Steiner points from being inserted outside the constraint polygon,
+        // which is the root cause of the refinement escape bug.
+        if (_hasConstraints && _refineOnlyInsideConstraints)
+        {
+            foreach (var con in constraints)
+            {
+                if (con is PolygonConstraint poly && !poly.IsHole())
+                {
+                    _constraintPolygonVertices = poly.GetVertices();
+                    break;
+                }
+            }
+        }
 
         // Initialize collections with reference equality comparison for edges
         _vdata = new Dictionary<IVertex, VData>(ReferenceEqualityComparer.Instance);
@@ -636,6 +658,32 @@ public class RuppertRefiner : IDelaunayRefiner
     }
 
     /// <summary>
+    ///     Adds a convex hull constraint from the TIN's current perimeter vertices.
+    ///     The hull vertices are the actual TIN vertex instances (shared references),
+    ///     so Z values are preserved and no duplicate vertices are created.
+    /// </summary>
+    private void AddConvexHullConstraint(IIncrementalTin tin)
+    {
+        var perimeter = tin.GetPerimeter();
+        if (perimeter.Count < 3)
+            return;
+
+        var hullVertices = new List<IVertex>();
+        foreach (var edge in perimeter)
+        {
+            var a = edge.GetA();
+            if (!a.IsNullVertex())
+                hullVertices.Add(a);
+        }
+
+        if (hullVertices.Count < 3)
+            return;
+
+        var hullConstraint = new PolygonConstraint(hullVertices);
+        tin.AddConstraints(new List<IConstraint> { hullConstraint }, true);
+    }
+
+    /// <summary>
     ///     Computes the average Z value of all vertices in the TIN.
     /// </summary>
     private static double ComputeAverageZ(IIncrementalTin tin)
@@ -666,12 +714,19 @@ public class RuppertRefiner : IDelaunayRefiner
         // that are inside a constraint region. When false, refine all triangles.
         if (_refineOnlyInsideConstraints && _hasConstraints)
         {
-            // Check if triangle is inside a constraint region by verifying edge membership
             var eA = t.GetEdgeA();
             var eB = t.GetEdgeB();
             var eC = t.GetEdgeC();
 
+            // All 3 edges must be constraint region members
             if (!eA.IsConstraintRegionMember() || !eB.IsConstraintRegionMember() || !eC.IsConstraintRegionMember())
+                return 0.0;
+
+            // At least one edge must be interior (not just border).
+            // A triangle at the constraint boundary can have all 3 edges as border
+            // members yet its centroid is outside the polygon. Requiring an interior
+            // edge ensures we only refine triangles that are unambiguously inside.
+            if (!eA.IsConstraintRegionInterior() && !eB.IsConstraintRegionInterior() && !eC.IsConstraintRegionInterior())
                 return 0.0;
         }
 
@@ -756,12 +811,12 @@ public class RuppertRefiner : IDelaunayRefiner
         if (vA.IsNullVertex() || vB.IsNullVertex() || vC.IsNullVertex())
             return 0.0;
 
-        // When RefineOnlyInsideConstraints is true (default), only refine triangles
-        // that are inside a constraint region. When false, refine all triangles.
         if (_refineOnlyInsideConstraints && _hasConstraints)
         {
-            // Check if triangle is inside a constraint region by verifying edge membership
             if (!eA.IsConstraintRegionMember() || !eB.IsConstraintRegionMember() || !eC.IsConstraintRegionMember())
+                return 0.0;
+
+            if (!eA.IsConstraintRegionInterior() && !eB.IsConstraintRegionInterior() && !eC.IsConstraintRegionInterior())
                 return 0.0;
         }
 
@@ -1121,6 +1176,16 @@ public class RuppertRefiner : IDelaunayRefiner
         var off = new Vertex(ox, oy, oz, _vertexIndexer++);
         off = off.WithSynthetic(true);
 
+        // Geometric containment check: reject offcenter if it falls outside the constraint polygon.
+        // This prevents the cascade where boundary-straddling triangles generate Steiner points
+        // outside the constraint, which then propagate interior flags and cause runaway escape.
+        if (_refineOnlyInsideConstraints && _hasConstraints && _constraintPolygonVertices != null)
+        {
+            var pip = Utils.Polyside.IsPointInPolygon(_constraintPolygonVertices, ox, oy);
+            if (pip == Utils.Polyside.Result.Outside)
+                return null;
+        }
+
         var enc = FirstEncroachedByPoint(off);
         if (enc != null)
             return SplitSegmentSmart(enc);
@@ -1151,6 +1216,13 @@ public class RuppertRefiner : IDelaunayRefiner
             return null;
 
         var center = new Vertex(cc.GetX(), cc.GetY(), 0);
+
+        if (_refineOnlyInsideConstraints && _hasConstraints && _constraintPolygonVertices != null)
+        {
+            var pip = Utils.Polyside.IsPointInPolygon(_constraintPolygonVertices, cc.GetX(), cc.GetY());
+            if (pip == Utils.Polyside.Result.Outside)
+                return null;
+        }
 
         var enc = FirstEncroachedByPoint(center);
         if (enc != null)

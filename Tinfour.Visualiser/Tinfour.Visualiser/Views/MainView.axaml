@@ -208,7 +208,8 @@
                                     <TextBlock Text="Ruppert Mesh Refinement" Classes="Header" />
                                     <TextBlock Text="Improves triangle quality by eliminating skinny triangles" FontSize="10" Foreground="#909090" Margin="0,0,0,5" TextWrapping="Wrap" />
                                     <CheckBox Content="Refine only inside constraints" IsChecked="{Binding RefineOnlyInsideConstraints}" Margin="0,0,0,2" ToolTip.Tip="When checked, only triangles inside constraint regions are refined. When unchecked, the entire mesh is refined." />
-                                    <CheckBox Content="Add bounding box constraint" IsChecked="{Binding AddBoundingBoxConstraint}" Margin="0,0,0,5" ToolTip.Tip="Adds a rectangular constraint around the data bounds to prevent mesh expansion during refinement." />
+                                    <CheckBox Content="Add bounding box constraint" IsChecked="{Binding AddBoundingBoxConstraint}" Margin="0,0,0,2" ToolTip.Tip="Adds a rectangular constraint around the data bounds to prevent mesh expansion during refinement." />
+                                    <CheckBox Content="Add convex hull constraint" IsChecked="{Binding AddConvexHullConstraint}" Margin="0,0,0,5" ToolTip.Tip="Adds the convex hull of the data points as a constraint, confining refinement to the data extent. More efficient than bounding box for irregularly shaped data." />
                                     <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,5">
                                         <TextBlock Grid.Column="0" Text="Min Angle:" VerticalAlignment="Center" />
                                         <Slider Grid.Column="1" Value="{Binding RuppertMinAngle}" Minimum="10" Maximum="33" TickFrequency="1" IsSnapToTickEnabled="True" Margin="5,0" />

@@ -299,7 +299,6 @@ public class IncrementalTin : IIncrementalTin
 
         if (_isLocked)
         {
-            Console.WriteLine("AddConstraints: TIN is locked!");
             if (_lockedDueToConstraints)
                 throw new InvalidOperationException("Constraints already added - no further additions supported");
 
@@ -307,10 +306,7 @@ public class IncrementalTin : IIncrementalTin
         }
 
         if (constraints == null || constraints.Count == 0)
-        {
-            Console.WriteLine("AddConstraints: No constraints to add");
             return;
-        }
 
         // Note: AddConstraints should only be called once during the lifetime of a TIN.
         // Multiple calls are not currently supported and may produce undefined results.
@@ -1108,6 +1104,8 @@ public class IncrementalTin : IIncrementalTin
         // Return an edge that is connected to the new vertex and points inward
         // to the TIN. This is important for the point-location logic that
         // uses the last inserted edge as a starting point for its search.
+        // Note: Constraint flag clearing is done by the caller (InsertVertex)
+        // after this method returns, using the returned edge's pinwheel.
         return n2.GetDual();
     }
 
@@ -1286,9 +1284,25 @@ public class IncrementalTin : IIncrementalTin
 
         // If we're inserting outside the current convex hull
         if (searchEdge.GetB().IsNullVertex())
-
+        {
             // Extend the TIN to include this new vertex
-            return ExtendTin(searchEdge, v);
+            var extendResult = ExtendTin(searchEdge, v);
+
+            // After extending the hull, clear stale constraint region flags on all
+            // edges around the new vertex. Since v was outside the convex hull, it is
+            // guaranteed to be outside any constraint region. The flip loop in ExtendTin
+            // may leave stale interior flags from the pre-flip topology on edges that
+            // now connect to v. Clear them unconditionally.
+            if (_maxLengthOfQueueInFloodFill > 0)
+            {
+                foreach (var edge in extendResult.GetPinwheel())
+                {
+                    edge.ClearConstraintRegionFlags();
+                }
+            }
+
+            return extendResult;
+        }
 
         // Match Java's getNearestEdge logic: find the edge of the triangle that is
         // nearest to the vertex being inserted. This is important for constraint
@@ -1300,16 +1314,32 @@ public class IncrementalTin : IIncrementalTin
         // Get anchor AFTER finding nearest edge (matching Java's order)
         var anchor = searchEdge.GetA();
 
-        // Check if we're inserting inside a constraint region
-        // Match Java logic: only check searchEdge (now the nearest edge).
-        // If the nearest edge is a constraint region member, the vertex is inside.
+        // Check if we're inserting inside a constraint region.
+        // IMPORTANT: Use IsConstraintRegionInterior(), NOT IsConstraintRegionMember().
+        // A border edge is a member of the constraint region but it doesn't tell you
+        // WHICH SIDE the new vertex is on. A triangle straddling the border has the
+        // border as one edge (a member), but the vertex may be on the exterior side.
+        // Interior edges unambiguously indicate the triangle is inside the constraint.
+        // In a valid CDT, any inside triangle adjacent to the border has at least one
+        // interior edge (connecting to vertices strictly inside, or between border
+        // vertices on the interior side).
         var vertexConstraintIndex = -1;
-        if (_constraintList.Count > 0 && searchEdge.IsConstraintRegionMember())
+        if (_constraintList.Count > 0)
         {
-            var con = GetRegionConstraint(searchEdge);
-            if (con != null)
+            var eA = searchEdge;
+            var eB = searchEdge.GetForward();
+            var eC = searchEdge.GetReverse();
+
+            IQuadEdge? memberEdge = null;
+            if (eA.IsConstraintRegionInterior()) memberEdge = eA;
+            else if (eB.IsConstraintRegionInterior()) memberEdge = eB;
+            else if (eC.IsConstraintRegionInterior()) memberEdge = eC;
+
+            if (memberEdge != null)
             {
-                vertexConstraintIndex = con.GetConstraintIndex();
+                var con = GetRegionConstraint(memberEdge);
+                if (con != null)
+                    vertexConstraintIndex = con.GetConstraintIndex();
             }
         }
 
@@ -1715,6 +1745,42 @@ public class IncrementalTin : IIncrementalTin
             if (allInteriorSameIndex && interiorConstraintIndex >= 0)
             {
                 ab.SetConstraintRegionInteriorIndex(interiorConstraintIndex);
+            }
+
+            // FIX-02: Triangle-adjacency inference when all-surrounding check fails.
+            // After the flip, ab connects d-c. The two new triangles are:
+            //   Triangle 1 (d,c,a): edges ab(=dc), ca, ad
+            //   Triangle 2 (c,d,b): edges ba(=cd), db, bc
+            // If both non-ab edges of a triangle share the same interior index,
+            // then ab should be interior to that constraint region.
+            // Note: bc/ca/ad/db references remain valid after the inline flip --
+            // the flip mutates ab's vertices and forward/reverse pointers but does
+            // not reallocate edges (confirmed by lines 1753-1756 using them for
+            // recursive RestoreConformity calls).
+            if (!ab.IsConstraintRegionMember())
+            {
+                // Triangle (d,c,a): check ca and ad
+                if (ca.IsConstraintRegionInterior() && ad.IsConstraintRegionInterior())
+                {
+                    var caIdx = ca.GetConstraintRegionInteriorIndex();
+                    var adIdx = ad.GetConstraintRegionInteriorIndex();
+                    if (caIdx == adIdx)
+                    {
+                        ab.SetConstraintRegionInteriorIndex(caIdx);
+                    }
+                }
+
+                // If still unmarked, check Triangle (c,d,b): check db and bc
+                if (!ab.IsConstraintRegionMember() &&
+                    db.IsConstraintRegionInterior() && bc.IsConstraintRegionInterior())
+                {
+                    var dbIdx = db.GetConstraintRegionInteriorIndex();
+                    var bcIdx = bc.GetConstraintRegionInteriorIndex();
+                    if (dbIdx == bcIdx)
+                    {
+                        ab.SetConstraintRegionInteriorIndex(dbIdx);
+                    }
+                }
             }
         }
 

@@ -167,6 +167,9 @@ public partial class MainViewModel : ViewModelBase
     private bool _addBoundingBoxConstraint = false;
 
     [ObservableProperty]
+    private bool _addConvexHullConstraint = false;
+
+    [ObservableProperty]
     private bool _canApplyRuppert;
 
     public MainViewModel()
@@ -445,9 +448,9 @@ public partial class MainViewModel : ViewModelBase
             return;
         }
 
-        if (this.RefineOnlyInsideConstraints && !this.AddBoundingBoxConstraint && this.Triangulation.GetConstraints().Count == 0)
+        if (this.RefineOnlyInsideConstraints && !this.AddBoundingBoxConstraint && !this.AddConvexHullConstraint && this.Triangulation.GetConstraints().Count == 0)
         {
-            this.StatusText = "❌ Error: Ruppert refinement requires constraints when 'Refine only inside constraints' is enabled. Add constraints first, enable 'Add bounding box constraint', or disable the option.";
+            this.StatusText = "❌ Error: Ruppert refinement requires constraints when 'Refine only inside constraints' is enabled. Add constraints first, enable 'Add bounding box constraint' or 'Add convex hull constraint', or disable the option.";
             return;
         }
 
@@ -472,7 +475,8 @@ public partial class MainViewModel : ViewModelBase
                     InterpolateZ = true,  // Required for rasterization - interpolates Z values for new vertices
                     InterpolationType = this.SelectedInterpolationType,
                     RefineOnlyInsideConstraints = this.RefineOnlyInsideConstraints,
-                    AddBoundingBoxConstraint = this.AddBoundingBoxConstraint
+                    AddBoundingBoxConstraint = this.AddBoundingBoxConstraint,
+                    AddConvexHullConstraint = this.AddConvexHullConstraint
                 };
 
                 var refiner = new RuppertRefiner(this.Triangulation, options);
@@ -959,6 +963,11 @@ public partial class MainViewModel : ViewModelBase
         UpdateCanApplyRuppert();
     }
 
+    partial void OnAddConvexHullConstraintChanged(bool value)
+    {
+        UpdateCanApplyRuppert();
+    }
+
     private void UpdateCanApplyRuppert()
     {
         var tin = this.TriangulationResult?.Tin;
@@ -968,10 +977,9 @@ public partial class MainViewModel : ViewModelBase
             return;
         }
 
-        // If refining only inside constraints, we need constraints present OR bounding box will be added
-        // Otherwise, we can refine the entire mesh without constraints
         this.CanApplyRuppert = !this.RefineOnlyInsideConstraints
                                || this.AddBoundingBoxConstraint
+                               || this.AddConvexHullConstraint
                                || tin.GetConstraints().Count > 0;
     }
 

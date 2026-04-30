@@ -33,4 +33,8 @@
     <Compile Remove="StochasticLawsonsWalkTests.cs" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="..\RuppertsTestData\TestTrail.csv" CopyToOutputDirectory="PreserveNewest" Link="RuppertsTestData\TestTrail.csv" />
+  </ItemGroup>
+
 </Project>

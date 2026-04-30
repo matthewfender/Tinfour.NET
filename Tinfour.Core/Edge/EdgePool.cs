@@ -298,19 +298,18 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
         AssertReciprocity(edf);
         AssertReciprocity(edr);
 
+        // Clear stale constraint region flags before vertex reassignment.
+        // The edge is being flipped to a new diagonal, so its old region
+        // membership (interior/border) is no longer valid.
+        e.ClearConstraintRegionFlags();
+
         // Reassign vertices so that e = c->d and ed = d->c
         e.SetVertices(c, d);
         ed.SetVertices(d, c);
 
-        // Note: We do NOT clear constraint flags here even though the edge's role has changed.
-        // The caller (RestoreConformity) should call SweepForConstraintAssignments which will
-        // properly propagate constraint membership from neighboring edges.
-        // Clearing flags here would prevent the sweep from working correctly since the sweep
-        // only propagates FROM edges that are already marked as constraint region members.
-        //
-        // If the flipped edge should no longer be interior, the sweep will not re-mark it
-        // because its neighbors won't be interior either. If it should be interior, the sweep
-        // will mark it based on neighboring interior edges.
+        // Note: The only caller is ExtendTin(), which must handle constraint flag
+        // re-assignment after the flip loop completes. ClearConstraintRegionFlags()
+        // is called above to prevent stale flags from the pre-flip topology.
 
         // Rewire forward cycles for the two new triangles
         // Triangle (c, d, b): e(c->d) -> edr(d->b) -> ef(b->c)

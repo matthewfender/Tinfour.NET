@@ -128,4 +128,56 @@ public static class Polyside
 
         return Result.Outside;
     }
+
+    /// <summary>
+    ///     Determines if a point is inside a polygon defined by a list of vertices.
+    ///     The polygon must be a simple (non-self-intersecting) loop, but may be
+    ///     either convex or non-convex. The vertex list represents a closed polygon:
+    ///     the last vertex implicitly connects back to the first vertex. The polygon
+    ///     must have a non-zero area.
+    /// </summary>
+    /// <param name="vertices">A list of vertices defining the polygon boundary.</param>
+    /// <param name="x">The Cartesian x coordinate of the query point</param>
+    /// <param name="y">The Cartesian y coordinate of the query point</param>
+    /// <returns>A valid Result enumeration</returns>
+    /// <exception cref="ArgumentException">Thrown if the polygon has fewer than 3 vertices</exception>
+    public static Result IsPointInPolygon(IList<IVertex> vertices, double x, double y)
+    {
+        var n = vertices.Count;
+        if (n < 3)
+            throw new ArgumentException($"A polygon needs at least three vertices, but the input size is {n}");
+
+        var rCross = 0;
+        var lCross = 0;
+
+        for (var i = 0; i < n; i++)
+        {
+            var v0 = vertices[i];
+            var v1 = vertices[(i + 1) % n];
+            var x0 = v0.X;
+            var y0 = v0.Y;
+            var x1 = v1.X;
+            var y1 = v1.Y;
+            var yDelta = y0 - y1;
+
+            if (y1 > y != y0 > y)
+            {
+                var xTest = (x1 * y0 - x0 * y1 + y * (x0 - x1)) / yDelta;
+                if (xTest > x) rCross++;
+            }
+
+            if (y1 < y != y0 < y)
+            {
+                var xTest = (x1 * y0 - x0 * y1 + y * (x0 - x1)) / yDelta;
+                if (xTest < x) lCross++;
+            }
+        }
+
+        // (rCross%2) != (lCross%2)
+        if (((rCross ^ lCross) & 0x01) == 1) return Result.Edge;
+
+        if ((rCross & 0x01) == 1) return Result.Inside;
+
+        return Result.Outside;
+    }
 }
