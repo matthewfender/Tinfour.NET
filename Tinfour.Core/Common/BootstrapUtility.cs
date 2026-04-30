@@ -114,20 +114,28 @@ public class BootstrapUtility
             {
                 // Pick three unique vertices at random
                 for (var i = 0; i < 3; i++)
+                {
+                    var attempts = 0;
                     while (true)
                     {
                         var index = _random.Next(n);
                         testVertices[i] = list[index];
                         var unique = true;
                         for (var j = 0; j < i; j++)
-                            if (testVertices[j].Equals(testVertices[i]))
+                            if (testVertices[j].GetX() == testVertices[i].GetX() &&
+                                testVertices[j].GetY() == testVertices[i].GetY())
                             {
                                 unique = false;
                                 break;
                             }
 
                         if (unique) break;
+
+                        // Prevent infinite loop when insufficient unique vertices exist
+                        if (++attempts > n * 2)
+                            break;
                     }
+                }
             }
 
             var area = _geometricOps.Area(testVertices[0], testVertices[1], testVertices[2]);

@@ -1203,7 +1203,25 @@ public class RuppertRefiner : IDelaunayRefiner
         else if (IsCornerCritical(b))
             corner = b;
 
-        var z = (a.GetZ() + b.GetZ()) * 0.5;
+        // Calculate midpoint coordinates
+        var mx = (a.X + b.X) * 0.5;
+        var my = (a.Y + b.Y) * 0.5;
+
+        // Use TIN interpolation for Z instead of linear interpolation along the edge.
+        // This ensures constraint edges "drape" over the terrain rather than cutting
+        // through it in a straight line between potentially distant endpoints.
+        double z;
+        if (_interpolateZ && _interpolator != null)
+        {
+            z = _interpolator.Interpolate(mx, my, null);
+            // Fallback to linear interpolation if TIN interpolation fails
+            if (double.IsNaN(z))
+                z = (a.GetZ() + b.GetZ()) * 0.5;
+        }
+        else
+        {
+            z = (a.GetZ() + b.GetZ()) * 0.5;
+        }
 
         // Remove old segment from our set
         var baseSeg = seg.GetBaseReference();

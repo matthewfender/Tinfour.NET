@@ -340,27 +340,30 @@ public class ContourBuilderForTin
     }
 
     /// <summary>
-    ///     Checks if an edge is inside a constraint region.
+    ///     Checks if an edge is inside or on the border of a constraint region.
     /// </summary>
     /// <param name="edge">The edge to check.</param>
-    /// <returns>True if the edge is inside a constraint region, false otherwise.</returns>
+    /// <returns>True if the edge is inside or on the border of a constraint region, false otherwise.</returns>
     private static bool IsEdgeInConstrainedRegion(IQuadEdge edge)
     {
-        // An edge is considered inside a constraint region if it or any of its
-        // triangle edges is marked as interior to a constraint region
-        if (edge.IsConstraintRegionInterior())
+        // An edge is considered part of a constraint region if:
+        // 1. It is marked as interior to a constraint region, OR
+        // 2. It is marked as a border of a constraint region, OR
+        // 3. Any of its triangle edges (forward/reverse) is marked as interior
+        if (edge.IsConstraintRegionInterior() || edge.IsConstraintRegionBorder())
             return true;
 
         var forward = edge.GetForward();
-        if (forward.IsConstraintRegionInterior())
+        if (forward.IsConstraintRegionInterior() || forward.IsConstraintRegionBorder())
             return true;
 
         var reverse = edge.GetReverse();
-        if (reverse.IsConstraintRegionInterior())
+        if (reverse.IsConstraintRegionInterior() || reverse.IsConstraintRegionBorder())
             return true;
 
         return false;
     }
+
 
     /// <summary>
     ///     Build contours that lie entirely inside the TIN and do not intersect
@@ -461,6 +464,10 @@ public class ContourBuilderForTin
         foreach (var edge in _perimeter!)
         {
             MarkAsVisited(edge);
+
+            // Skip edges outside constraint regions if filtering is enabled
+            if (_constrainedRegionsOnly && !IsEdgeInConstrainedRegion(edge))
+                continue;
 
             var e = edge;
             var f = e.GetForward();
@@ -829,6 +836,7 @@ public class ContourBuilderForTin
                     MarkAsVisited(g);
                     MarkAsVisited(h);
                     MarkAsVisited(k);
+
                     if (zG > z && z > zK)
                     {
                         e = h.GetDual();
