@@ -31,4 +31,8 @@
     <PackageReference Include="Clipper2" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Tinfour.Core.Tests" />
+  </ItemGroup>
+
 </Project>
