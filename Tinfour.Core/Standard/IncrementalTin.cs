@@ -1105,6 +1105,23 @@ public class IncrementalTin : IIncrementalTin
             }
         }
 
+        // After the flip loop, sweep for correct constraint assignments if constraints exist.
+        // This corrects any flag state that was disrupted by the flips performed above.
+        // The check for _maxLengthOfQueueInFloodFill > 0 ensures we only sweep when
+        // flood fill has been completed (i.e., constraints have been processed).
+        if (_maxLengthOfQueueInFloodFill > 0)
+        {
+            // Walk the pinwheel of edges around the inserted vertex v
+            // and sweep each for constraint region membership.
+            var sweepStart = (QuadEdge)n2;
+            var sweepEdge = sweepStart;
+            do
+            {
+                SweepForConstraintAssignments(sweepEdge);
+                sweepEdge = (QuadEdge)sweepEdge.GetForwardFromDual();
+            } while (sweepEdge != sweepStart);
+        }
+
         // Return an edge that is connected to the new vertex and points inward
         // to the TIN. This is important for the point-location logic that
         // uses the last inserted edge as a starting point for its search.
