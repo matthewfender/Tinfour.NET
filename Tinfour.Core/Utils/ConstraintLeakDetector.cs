@@ -79,8 +79,14 @@ public class ConstraintLeakDetector
     /// </summary>
     /// <param name="tin">The incremental TIN to examine.</param>
     /// <param name="constraint">The constraint polygon to check against.</param>
+    /// <param name="boundaryTolerance">
+    ///     Points classified as Outside by PIP but within this distance of a constraint
+    ///     edge are treated as on-boundary (not leaked). This handles Steiner points placed
+    ///     exactly on constraint edges by segment splitting, where PIP ray-crossing can
+    ///     return Outside due to floating-point precision. Default: 1e-6.
+    /// </param>
     /// <returns>A <see cref="LeakReport"/> describing all leaked and divergent points.</returns>
-    public static LeakReport Detect(IIncrementalTin tin, IConstraint constraint)
+    public static LeakReport Detect(IIncrementalTin tin, IConstraint constraint, double boundaryTolerance = 1e-6)
     {
         var constraintVertices = constraint.GetVertices();
         var navigator = tin.GetNavigator();
@@ -96,6 +102,17 @@ public class ConstraintLeakDetector
 
             // Geometric point-in-polygon check
             var pipResult = Polyside.IsPointInPolygon(constraintVertices, x, y);
+
+            // For points classified as Outside, check if they are within tolerance
+            // of a constraint edge. SplitSegmentSmart places Steiner points exactly on
+            // constraint edges, and PIP ray-crossing can misclassify these as Outside.
+            if (pipResult == Polyside.Result.Outside && boundaryTolerance > 0)
+            {
+                var dist = MinDistanceToPolygonEdge(x, y, constraintVertices);
+                if (dist <= boundaryTolerance)
+                    pipResult = Polyside.Result.Edge;
+            }
+
             var geometryInside = pipResult != Polyside.Result.Outside;
 
             // Flag state check: navigate to the containing triangle and check
@@ -134,5 +151,34 @@ public class ConstraintLeakDetector
             steinerPoints.Count,
             leakedPoints,
             divergences);
+    }
+
+    private static double MinDistanceToPolygonEdge(double px, double py, IList<IVertex> vertices)
+    {
+        var minDist = double.MaxValue;
+        var n = vertices.Count;
+        for (var i = 0; i < n; i++)
+        {
+            var j = (i + 1) % n;
+            var dist = PointToSegmentDistance(px, py,
+                vertices[i].X, vertices[i].Y,
+                vertices[j].X, vertices[j].Y);
+            if (dist < minDist) minDist = dist;
+        }
+        return minDist;
+    }
+
+    private static double PointToSegmentDistance(double px, double py, double ax, double ay, double bx, double by)
+    {
+        var dx = bx - ax;
+        var dy = by - ay;
+        var lenSq = dx * dx + dy * dy;
+        if (lenSq < 1e-30)
+            return Math.Sqrt((px - ax) * (px - ax) + (py - ay) * (py - ay));
+
+        var t = Math.Max(0, Math.Min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq));
+        var projX = ax + t * dx;
+        var projY = ay + t * dy;
+        return Math.Sqrt((px - projX) * (px - projX) + (py - projY) * (py - projY));
     }
 }

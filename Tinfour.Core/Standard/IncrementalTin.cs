@@ -1319,11 +1319,14 @@ public class IncrementalTin : IIncrementalTin
         var anchor = searchEdge.GetA();
 
         // Check if we're inserting inside a constraint region.
-        // Check all 3 edges of the containing triangle, not just the nearest.
-        // Near constraint boundaries, the nearest edge may be the border edge
-        // (which is NOT interior), while the other two edges ARE interior.
-        // This prevents missed propagation when GetNearestEdgeInTriangle
-        // returns a boundary edge for a vertex that is inside the region.
+        // IMPORTANT: Use IsConstraintRegionInterior(), NOT IsConstraintRegionMember().
+        // A border edge is a member of the constraint region but it doesn't tell you
+        // WHICH SIDE the new vertex is on. A triangle straddling the border has the
+        // border as one edge (a member), but the vertex may be on the exterior side.
+        // Interior edges unambiguously indicate the triangle is inside the constraint.
+        // In a valid CDT, any inside triangle adjacent to the border has at least one
+        // interior edge (connecting to vertices strictly inside, or between border
+        // vertices on the interior side).
         var vertexConstraintIndex = -1;
         if (_constraintList.Count > 0)
         {
@@ -1332,9 +1335,9 @@ public class IncrementalTin : IIncrementalTin
             var eC = searchEdge.GetReverse();
 
             IQuadEdge? memberEdge = null;
-            if (eA.IsConstraintRegionMember()) memberEdge = eA;
-            else if (eB.IsConstraintRegionMember()) memberEdge = eB;
-            else if (eC.IsConstraintRegionMember()) memberEdge = eC;
+            if (eA.IsConstraintRegionInterior()) memberEdge = eA;
+            else if (eB.IsConstraintRegionInterior()) memberEdge = eB;
+            else if (eC.IsConstraintRegionInterior()) memberEdge = eC;
 
             if (memberEdge != null)
             {

@@ -91,9 +91,8 @@ public class RuppertEscapeDiagnosticTests
         // 9. Log statistics
         LogMeshStatistics(tin, report);
 
-        // 10. Assert escape bug is reproduced (leakedCount > 0)
-        Assert.True(report.LeakedCount > 0,
-            "Expected escape bug to produce leaked Steiner points with rectangle constraint");
+        // 10. Assert no Steiner points leaked outside the constraint
+        Assert.Equal(0, report.LeakedCount);
     }
 
     /// <summary>
@@ -150,9 +149,8 @@ public class RuppertEscapeDiagnosticTests
         // 8. Log statistics
         LogMeshStatistics(tin, report);
 
-        // 9. Assert escape bug is reproduced (leakedCount > 0)
-        Assert.True(report.LeakedCount > 0,
-            "Expected escape bug to produce leaked Steiner points with convex hull constraint");
+        // 9. Assert no Steiner points leaked outside the constraint
+        Assert.Equal(0, report.LeakedCount);
     }
 
     /// <summary>
