@@ -97,8 +97,6 @@ public class RuppertRefiner : IDelaunayRefiner
     private readonly bool _interpolateZ;
     private readonly bool _refineOnlyInsideConstraints;
     private readonly bool _hasConstraints;  // Cached flag to avoid GetConstraints() call in hot path
-    private readonly bool _enableReFlood;
-    private readonly int _reFloodInterval;
 
     // Vertex metadata tracking
     private readonly Dictionary<IVertex, VData> _vdata;
@@ -318,9 +316,6 @@ public class RuppertRefiner : IDelaunayRefiner
         // Cache whether the TIN has constraints to avoid GetConstraints() call in hot path
         var constraints = tin.GetConstraints();
         _hasConstraints = constraints.Count > 0;
-        _enableReFlood = options.EnableReFlood;
-        _reFloodInterval = options.ReFloodInterval;
-
         // Cache the first polygon constraint's vertices for geometric containment checks.
         // This prevents Steiner points from being inserted outside the constraint polygon,
         // which is the root cause of the refinement escape bug.
@@ -460,7 +455,6 @@ public class RuppertRefiner : IDelaunayRefiner
 
         var iterations = 0;
         var maxIter = _maxIterations > 0 ? _maxIterations : _vdata.Count * 200;
-        var insertionsSinceReFlood = 0;
 
         while (iterations++ < maxIter)
         {
@@ -468,16 +462,6 @@ public class RuppertRefiner : IDelaunayRefiner
 
             if (v == null)
                 return true;
-
-            insertionsSinceReFlood++;
-            if (_enableReFlood && _hasConstraints && insertionsSinceReFlood >= _reFloodInterval)
-            {
-                if (_tin is IncrementalTin concreteTin)
-                {
-                    concreteTin.ReFloodConstraintRegions();
-                }
-                insertionsSinceReFlood = 0;
-            }
         }
 
         return false;

@@ -78,10 +78,8 @@ public class EscapeRootCauseTest
         _output.WriteLine($"  Interior with no flag: {interiorWithNoFlag}");
         _output.WriteLine("");
 
-        // Disable re-flood to see raw behavior
         var options = new RuppertOptions(25.0);
         options.MaxIterations = 500;
-        options.EnableReFlood = false;
         var refiner = new RuppertRefiner(tin, options, null);
 
         int totalInsertions = 0;
