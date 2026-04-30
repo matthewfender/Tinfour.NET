@@ -277,6 +277,67 @@ public class ReFloodSafetyNetTests
     }
 
     /// <summary>
+    ///     Investigative test: checks whether DIAG-04 (convex hull) non-convergence
+    ///     is pre-existing or caused by re-flood. Runs with EnableReFlood=false.
+    /// </summary>
+    [Fact]
+    public void ConvexHull_WithoutReFlood_CheckConvergence()
+    {
+        var vertices = LoadTrailDataAsUtm();
+        if (vertices.Count == 0)
+        {
+            _output.WriteLine("Trail data not available, skipping");
+            return;
+        }
+
+        var minX = vertices.Min(v => v.X);
+        var maxX = vertices.Max(v => v.X);
+        var minY = vertices.Min(v => v.Y);
+        var maxY = vertices.Max(v => v.Y);
+        var nominalSpacing = Math.Sqrt((maxX - minX) * (maxY - minY) / vertices.Count);
+
+        var tin = new IncrementalTin(nominalSpacing);
+        tin.Add(vertices);
+
+        // Extract convex hull
+        var perimeter = tin.GetPerimeter();
+        var hullVertices = new List<Vertex>();
+        var hullIndex = 1_000_000;
+        foreach (var edge in perimeter)
+        {
+            var a = edge.GetA();
+            if (!a.IsNullVertex())
+                hullVertices.Add(new Vertex(a.X, a.Y, a.GetZ(), hullIndex++));
+        }
+
+        if (hullVertices.Count < 3)
+        {
+            _output.WriteLine($"Too few hull vertices: {hullVertices.Count}");
+            return;
+        }
+
+        var hullConstraint = new PolygonConstraint(hullVertices);
+        tin.AddConstraints(new IConstraint[] { hullConstraint }, true);
+
+        var options = new RuppertOptions(25.0)
+        {
+            MaxIterations = 5000,
+            EnableReFlood = false
+        };
+
+        var refiner = new RuppertRefiner(tin, options);
+        var success = refiner.Refine();
+
+        var report = ConstraintLeakDetector.Detect(tin, hullConstraint);
+        _output.WriteLine("=== DIAG-04 WITHOUT Re-Flood ===");
+        _output.WriteLine($"  success={success}");
+        _output.WriteLine($"  Total vertices:       {tin.GetVertices().Count}");
+        _output.WriteLine($"  Steiner points:       {report.TotalSteinerPoints}");
+        _output.WriteLine($"  Leaked Steiner count: {report.LeakedCount}");
+        _output.WriteLine("=================================");
+    }
+
+    /// <summary>
     ///     Loads trail CSV data and converts each point from WGS84 to UTM coordinates.
     /// </summary>
     private static List<Vertex> LoadTrailDataAsUtm()
