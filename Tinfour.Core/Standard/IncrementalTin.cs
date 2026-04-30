@@ -2029,6 +2029,57 @@ public class IncrementalTin : IIncrementalTin
         _constraintList.Add(constraint);
     }
 
+    /// <summary>
+    ///     Re-runs flood fill for all polygon constraints to correct accumulated
+    ///     constraint region flag drift. Clears interior flags (preserving border
+    ///     flags) then re-floods from each constraint's linking edge.
+    /// </summary>
+    internal void ReFloodConstraintRegions()
+    {
+        if (_constraintList.Count == 0) return;
+
+        // Phase 1: Clear interior-only flags (preserve borders)
+        foreach (var e in GetEdgeIterator())
+        {
+            if (e.IsConstraintRegionInterior() && !e.IsConstraintRegionBorder())
+                e.ClearConstraintRegionFlags();
+        }
+
+        // Phase 2: Re-flood each polygon constraint
+        var visited = new BitArray(_edgePool.GetMaximumAllocationIndex() + 1);
+        var skippedCount = 0;
+
+        foreach (var c in _constraintList)
+        {
+            if (!c.DefinesConstrainedRegion()) continue;
+
+            var linkingEdge = c.GetConstraintLinkingEdge();
+            if (linkingEdge == null)
+            {
+                skippedCount++;
+                continue;
+            }
+
+            // Validate the linking edge is still a valid constraint border
+            // (topology changes may have invalidated it)
+            if (!linkingEdge.IsConstraintRegionBorder())
+            {
+                skippedCount++;
+                continue;
+            }
+
+            var eList = new List<IQuadEdge> { linkingEdge };
+            var processor = new ConstraintProcessor(_edgePool, _geoOp, _thresholds, _walker);
+            processor.FloodFillConstrainedRegion(c, visited, eList);
+        }
+
+        if (skippedCount > 0)
+        {
+            Debug.WriteLine(
+                $"ReFloodConstraintRegions: Skipped {skippedCount} constraints due to null/invalid linking edge");
+        }
+    }
+
     #endregion
 }
 

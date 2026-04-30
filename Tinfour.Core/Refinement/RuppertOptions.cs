@@ -226,6 +226,26 @@ public class RuppertOptions
     public InterpolationType InterpolationType { get; set; } = InterpolationType.TriangularFacet;
 
     /// <summary>
+    ///     Gets or sets whether periodic re-flooding of constraint regions is enabled
+    ///     during refinement. When enabled, constraint region interior flags are
+    ///     periodically recalculated to correct any accumulated flag drift.
+    ///     Default is <c>true</c>.
+    /// </summary>
+    public bool EnableReFlood { get; set; } = true;
+
+    /// <summary>
+    ///     Gets or sets the number of Steiner point insertions between re-flood
+    ///     operations during refinement. Only used when <see cref="EnableReFlood"/>
+    ///     is <c>true</c>. Default is 200.
+    /// </summary>
+    /// <remarks>
+    ///     Lower values increase correctness confidence at the cost of performance.
+    ///     The re-flood operation is O(E) where E is the number of edges, so the
+    ///     overhead is typically negligible (less than 2%) at the default interval.
+    /// </remarks>
+    public int ReFloodInterval { get; set; } = 200;
+
+    /// <summary>
     ///     Gets or sets the maximum number of iterations for the refinement loop.
     /// </summary>
     /// <remarks>
