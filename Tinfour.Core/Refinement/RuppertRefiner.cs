@@ -307,8 +307,12 @@ public class RuppertRefiner : IDelaunayRefiner
         _ignoreSeditiousEncroachments = options.IgnoreSeditiousEncroachments;
         _refineOnlyInsideConstraints = options.RefineOnlyInsideConstraints;
 
-        // Add bounding box constraint if requested
-        if (options.AddBoundingBoxConstraint)
+        // Add bounding box or convex hull constraint if requested
+        if (options.AddConvexHullConstraint)
+        {
+            AddConvexHullConstraint(tin);
+        }
+        else if (options.AddBoundingBoxConstraint)
         {
             AddBoundingBoxConstraint(tin, options.BoundingBoxBufferPercent);
         }
@@ -720,6 +724,32 @@ public class RuppertRefiner : IDelaunayRefiner
         // Create and add constraint
         var boundingBoxConstraint = new PolygonConstraint(constraintVertices);
         tin.AddConstraints(new List<IConstraint> { boundingBoxConstraint }, true);
+    }
+
+    /// <summary>
+    ///     Adds a convex hull constraint from the TIN's current perimeter vertices.
+    ///     The hull vertices are the actual TIN vertex instances (shared references),
+    ///     so Z values are preserved and no duplicate vertices are created.
+    /// </summary>
+    private void AddConvexHullConstraint(IIncrementalTin tin)
+    {
+        var perimeter = tin.GetPerimeter();
+        if (perimeter.Count < 3)
+            return;
+
+        var hullVertices = new List<IVertex>();
+        foreach (var edge in perimeter)
+        {
+            var a = edge.GetA();
+            if (!a.IsNullVertex())
+                hullVertices.Add(a);
+        }
+
+        if (hullVertices.Count < 3)
+            return;
+
+        var hullConstraint = new PolygonConstraint(hullVertices);
+        tin.AddConstraints(new List<IConstraint> { hullConstraint }, true);
     }
 
     /// <summary>

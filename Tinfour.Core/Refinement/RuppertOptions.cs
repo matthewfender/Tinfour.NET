@@ -204,6 +204,15 @@ public class RuppertOptions
     public double BoundingBoxBufferPercent { get; set; } = 1.0;
 
     /// <summary>
+    ///     Gets or sets whether to add a convex hull constraint from the input data points
+    ///     before refinement. The hull vertices are the actual TIN vertices (shared references,
+    ///     correct Z values). Refinement is then confined to the data extent, avoiding wasted
+    ///     computation in no-data regions outside the hull.
+    /// </summary>
+    /// <value><c>true</c> to add a convex hull constraint; otherwise <c>false</c>. Default is <c>false</c>.</value>
+    public bool AddConvexHullConstraint { get; set; } = false;
+
+    /// <summary>
     ///     Gets or sets the interpolation method to use for computing Z values of new vertices.
     /// </summary>
     /// <remarks>
