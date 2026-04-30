@@ -125,24 +125,9 @@ public class RuppertRefiner : IDelaunayRefiner
     // Constraint polygon vertices for geometric containment checks during refinement
     private IList<IVertex>? _constraintPolygonVertices;
 
-    // Diagnostic data collection (null = disabled)
-    private List<InsertionDiagnostic>? _diagnostics;
-    private IList<IVertex>? _diagnosticConstraintVertices;
-
     #endregion
 
     #region Inner Types
-
-    /// <summary>
-    ///     Diagnostic record for a single Steiner point insertion.
-    /// </summary>
-    public record InsertionDiagnostic(
-        double TriCentroidX, double TriCentroidY,
-        double SteinerX, double SteinerY,
-        bool TriInsidePoly, bool PointInsidePoly,
-        bool ContainingTriInterior,
-        bool AllTriEdgesInterior,
-        string InsertionType);
 
     /// <summary>
     ///     Vertex creation type classification.
@@ -377,60 +362,6 @@ public class RuppertRefiner : IDelaunayRefiner
 
         var minAngleDeg = 180.0 / Math.PI * Math.Asin(1.0 / (2.0 * ratio));
         return new RuppertRefiner(tin, minAngleDeg);
-    }
-
-    #endregion
-
-    #region Diagnostics
-
-    /// <summary>
-    ///     Enables diagnostic data collection for each Steiner point insertion.
-    ///     Must be called before Refine(). Pass the constraint polygon vertices
-    ///     for geometric PIP testing.
-    /// </summary>
-    public void EnableDiagnostics(IList<IVertex> constraintVertices)
-    {
-        _diagnostics = new List<InsertionDiagnostic>();
-        _diagnosticConstraintVertices = constraintVertices;
-    }
-
-    /// <summary>
-    ///     Gets the collected diagnostics. Returns null if diagnostics were not enabled.
-    /// </summary>
-    public List<InsertionDiagnostic>? GetDiagnostics() => _diagnostics;
-
-    private void RecordDiagnostic(SimpleTriangle tri, double sx, double sy, string insertionType)
-    {
-        if (_diagnostics == null || _diagnosticConstraintVertices == null) return;
-
-        var centroidX = (tri.GetVertexA().X + tri.GetVertexB().X + tri.GetVertexC().X) / 3.0;
-        var centroidY = (tri.GetVertexA().Y + tri.GetVertexB().Y + tri.GetVertexC().Y) / 3.0;
-
-        var triPip = Tinfour.Core.Utils.Polyside.IsPointInPolygon(_diagnosticConstraintVertices, centroidX, centroidY);
-        var ptPip = Tinfour.Core.Utils.Polyside.IsPointInPolygon(_diagnosticConstraintVertices, sx, sy);
-
-        // Check containing triangle flags at the Steiner point location
-        var containingTri = _navigator.GetContainingTriangle(sx, sy);
-        var containingTriInterior = false;
-        if (containingTri != null)
-        {
-            containingTriInterior = containingTri.GetEdgeA().IsConstraintRegionMember()
-                                 || containingTri.GetEdgeB().IsConstraintRegionMember()
-                                 || containingTri.GetEdgeC().IsConstraintRegionMember();
-        }
-
-        // Check all 3 edges of the BAD triangle (the one being refined)
-        var allTriEdgesInterior = tri.GetEdgeA().IsConstraintRegionMember()
-                               && tri.GetEdgeB().IsConstraintRegionMember()
-                               && tri.GetEdgeC().IsConstraintRegionMember();
-
-        _diagnostics.Add(new InsertionDiagnostic(
-            centroidX, centroidY, sx, sy,
-            triPip != Tinfour.Core.Utils.Polyside.Result.Outside,
-            ptPip != Tinfour.Core.Utils.Polyside.Result.Outside,
-            containingTriInterior,
-            allTriEdgesInterior,
-            insertionType));
     }
 
     #endregion
@@ -1274,7 +1205,6 @@ public class RuppertRefiner : IDelaunayRefiner
         if (nearEdge != null)
             return SplitSegmentSmart(nearEdge);
 
-        RecordDiagnostic(tri, ox, oy, "offcenter");
         AddVertex(off, VType.Offcenter, null, 0);
         return off;
     }
@@ -1330,7 +1260,6 @@ public class RuppertRefiner : IDelaunayRefiner
         var centerZ = new Vertex(center.X, center.Y, cz, _vertexIndexer++);
         centerZ = centerZ.WithSynthetic(true);
 
-        RecordDiagnostic(tri, center.X, center.Y, "circumcenter");
         AddVertex(centerZ, VType.Circumcenter, null, 0);
         return centerZ;
     }

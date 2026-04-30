@@ -299,7 +299,6 @@ public class IncrementalTin : IIncrementalTin
 
         if (_isLocked)
         {
-            Console.WriteLine("AddConstraints: TIN is locked!");
             if (_lockedDueToConstraints)
                 throw new InvalidOperationException("Constraints already added - no further additions supported");
 
@@ -307,10 +306,7 @@ public class IncrementalTin : IIncrementalTin
         }
 
         if (constraints == null || constraints.Count == 0)
-        {
-            Console.WriteLine("AddConstraints: No constraints to add");
             return;
-        }
 
         // Note: AddConstraints should only be called once during the lifetime of a TIN.
         // Multiple calls are not currently supported and may produce undefined results.
