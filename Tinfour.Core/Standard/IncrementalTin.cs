@@ -1747,6 +1747,42 @@ public class IncrementalTin : IIncrementalTin
             {
                 ab.SetConstraintRegionInteriorIndex(interiorConstraintIndex);
             }
+
+            // FIX-02: Triangle-adjacency inference when all-surrounding check fails.
+            // After the flip, ab connects d-c. The two new triangles are:
+            //   Triangle 1 (d,c,a): edges ab(=dc), ca, ad
+            //   Triangle 2 (c,d,b): edges ba(=cd), db, bc
+            // If both non-ab edges of a triangle share the same interior index,
+            // then ab should be interior to that constraint region.
+            // Note: bc/ca/ad/db references remain valid after the inline flip --
+            // the flip mutates ab's vertices and forward/reverse pointers but does
+            // not reallocate edges (confirmed by lines 1753-1756 using them for
+            // recursive RestoreConformity calls).
+            if (!ab.IsConstraintRegionMember())
+            {
+                // Triangle (d,c,a): check ca and ad
+                if (ca.IsConstraintRegionInterior() && ad.IsConstraintRegionInterior())
+                {
+                    var caIdx = ca.GetConstraintRegionInteriorIndex();
+                    var adIdx = ad.GetConstraintRegionInteriorIndex();
+                    if (caIdx == adIdx)
+                    {
+                        ab.SetConstraintRegionInteriorIndex(caIdx);
+                    }
+                }
+
+                // If still unmarked, check Triangle (c,d,b): check db and bc
+                if (!ab.IsConstraintRegionMember() &&
+                    db.IsConstraintRegionInterior() && bc.IsConstraintRegionInterior())
+                {
+                    var dbIdx = db.GetConstraintRegionInteriorIndex();
+                    var bcIdx = bc.GetConstraintRegionInteriorIndex();
+                    if (dbIdx == bcIdx)
+                    {
+                        ab.SetConstraintRegionInteriorIndex(dbIdx);
+                    }
+                }
+            }
         }
 
         // Recursively check the surrounding edges
