@@ -118,6 +118,13 @@ public class IncrementalTin : IIncrementalTin
     /// </summary>
     private int _maxLengthOfQueueInFloodFill;
 
+    /// <summary>
+    ///     Interpolator for computing Z values during constraint edge splits.
+    ///     Built on the original TIN (before constraints) to ensure Z values are
+    ///     interpolated from the true input surface, not from synthetic vertices.
+    /// </summary>
+    private IInterpolatorOverTin? _constraintEdgeInterpolator;
+
     private int _nSyntheticVertices;
 
     /// <summary>
@@ -276,10 +283,17 @@ public class IncrementalTin : IIncrementalTin
     /// <param name="restoreConformity">Whether to restore Delaunay conformity</param>
     /// <param name="preInterpolateZ">
     ///     If true, any constraint vertices with NaN Z values will be populated
-    ///     by interpolating from the existing TIN using Triangular Facet Interpolation
-    ///     before insertion.
+    ///     by interpolating from the existing TIN before insertion.
     /// </param>
-    public void AddConstraints(IList<IConstraint> constraints, bool restoreConformity, bool preInterpolateZ = false)
+    /// <param name="interpolationType">
+    ///     The interpolation method to use for computing Z values of NaN constraint vertices
+    ///     and constraint edge splits during conformity restoration. Default is TriangularFacet.
+    /// </param>
+    public void AddConstraints(
+        IList<IConstraint> constraints,
+        bool restoreConformity,
+        bool preInterpolateZ = false,
+        InterpolationType interpolationType = InterpolationType.TriangularFacet)
     {
         if (_isDisposed) throw new InvalidOperationException("Unable to add constraints after disposal");
 
@@ -310,15 +324,42 @@ public class IncrementalTin : IIncrementalTin
 
         _isConformant = false;
 
+        // Phase 0: Add non-NaN constraint vertices to TIN first (if pre-interpolating)
+        // This ensures that constraint vertices with real Z values are available as
+        // interpolation sources when computing Z for NaN constraint vertices.
+        // Duplicate vertices are handled gracefully - they'll be detected and remapped later.
+        if (preInterpolateZ)
+        {
+            foreach (var c in constraints)
+            {
+                foreach (var v in c.GetVertices())
+                {
+                    if (!double.IsNaN(v.GetZ()))
+                        Add(v);
+                }
+            }
+        }
+
         // Phase 1: Complete constraints and add all constraint vertices to the TIN, remapping duplicates
         var polygonConstraints = new List<IConstraint>();
         var linearConstraints = new List<IConstraint>();
 
-        // Setup interpolator if needed
-        TriangularFacetInterpolator? interpolator = null;
+        // Setup interpolator if needed for pre-interpolation and constraint edge splits.
+        // IMPORTANT: We build the interpolator on a COPY of the current TIN (which now includes
+        // real-Z constraint vertices). This is necessary because subsequent constraint processing
+        // will modify the TIN topology (tunneling, edge removal, etc.), which would invalidate
+        // an interpolator built directly on `this`. The copy preserves the original triangulation
+        // structure for accurate interpolation during RestoreConformity edge splits.
+        IInterpolatorOverTin? interpolator = null;
         if (preInterpolateZ)
         {
-            interpolator = new TriangularFacetInterpolator(this);
+            var originalVertices = GetVertices().ToList();
+            var interpolationTin = new IncrementalTin(_nominalPointSpacing);
+            interpolationTin.Add(originalVertices);
+
+            interpolator = InterpolatorFactory.Create(interpolationTin, interpolationType);
+            // Store for use during RestoreConformity edge splits
+            _constraintEdgeInterpolator = interpolator;
         }
 
         foreach (var cIn in constraints)
@@ -1528,7 +1569,23 @@ public class IncrementalTin : IIncrementalTin
             // Instead, subdivide the constraint edge by adding a midpoint
             var mx = (a.X + b.X) / 2.0;
             var my = (a.Y + b.Y) / 2.0;
-            var mz = (a.GetZ() + b.GetZ()) / 2.0;
+
+            // Use TIN interpolation for Z instead of linear interpolation along the edge.
+            // This ensures constraint edges "drape" over the terrain rather than cutting
+            // through it in a straight line between potentially distant endpoints.
+            double mz;
+            if (_constraintEdgeInterpolator != null)
+            {
+                mz = _constraintEdgeInterpolator.Interpolate(mx, my, null);
+                // Fallback to linear interpolation if TIN interpolation fails
+                if (double.IsNaN(mz))
+                    mz = (a.GetZ() + b.GetZ()) / 2.0;
+            }
+            else
+            {
+                mz = (a.GetZ() + b.GetZ()) / 2.0;
+            }
+
             var m = new Vertex(mx, my, mz, _nSyntheticVertices++);
             m = m.WithStatus(Vertex.BitSynthetic | Vertex.BitConstraint);
 
