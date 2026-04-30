@@ -1105,26 +1105,11 @@ public class IncrementalTin : IIncrementalTin
             }
         }
 
-        // After the flip loop, sweep for correct constraint assignments if constraints exist.
-        // This corrects any flag state that was disrupted by the flips performed above.
-        // The check for _maxLengthOfQueueInFloodFill > 0 ensures we only sweep when
-        // flood fill has been completed (i.e., constraints have been processed).
-        if (_maxLengthOfQueueInFloodFill > 0)
-        {
-            // Walk the pinwheel of edges around the inserted vertex v
-            // and sweep each for constraint region membership.
-            var sweepStart = (QuadEdge)n2;
-            var sweepEdge = sweepStart;
-            do
-            {
-                SweepForConstraintAssignments(sweepEdge);
-                sweepEdge = (QuadEdge)sweepEdge.GetForwardFromDual();
-            } while (sweepEdge != sweepStart);
-        }
-
         // Return an edge that is connected to the new vertex and points inward
         // to the TIN. This is important for the point-location logic that
         // uses the last inserted edge as a starting point for its search.
+        // Note: Constraint flag clearing is done by the caller (InsertVertex)
+        // after this method returns, using the returned edge's pinwheel.
         return n2.GetDual();
     }
 
@@ -1303,9 +1288,25 @@ public class IncrementalTin : IIncrementalTin
 
         // If we're inserting outside the current convex hull
         if (searchEdge.GetB().IsNullVertex())
-
+        {
             // Extend the TIN to include this new vertex
-            return ExtendTin(searchEdge, v);
+            var extendResult = ExtendTin(searchEdge, v);
+
+            // After extending the hull, clear stale constraint region flags on all
+            // edges around the new vertex. Since v was outside the convex hull, it is
+            // guaranteed to be outside any constraint region. The flip loop in ExtendTin
+            // may leave stale interior flags from the pre-flip topology on edges that
+            // now connect to v. Clear them unconditionally.
+            if (_maxLengthOfQueueInFloodFill > 0)
+            {
+                foreach (var edge in extendResult.GetPinwheel())
+                {
+                    edge.ClearConstraintRegionFlags();
+                }
+            }
+
+            return extendResult;
+        }
 
         // Match Java's getNearestEdge logic: find the edge of the triangle that is
         // nearest to the vertex being inserted. This is important for constraint
