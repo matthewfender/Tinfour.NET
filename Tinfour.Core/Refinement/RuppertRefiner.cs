@@ -127,6 +127,7 @@ public class RuppertRefiner : IDelaunayRefiner
 
     // Constraint polygon vertices for geometric containment checks during refinement
     private IList<IVertex>? _constraintPolygonVertices;
+    private double _constraintMinX, _constraintMinY, _constraintMaxX, _constraintMaxY;
 
     #endregion
 
@@ -318,6 +319,17 @@ public class RuppertRefiner : IDelaunayRefiner
                 if (con is PolygonConstraint poly && !poly.IsHole())
                 {
                     _constraintPolygonVertices = poly.GetVertices();
+                    _constraintMinX = double.MaxValue;
+                    _constraintMinY = double.MaxValue;
+                    _constraintMaxX = double.MinValue;
+                    _constraintMaxY = double.MinValue;
+                    foreach (var v in _constraintPolygonVertices)
+                    {
+                        if (v.X < _constraintMinX) _constraintMinX = v.X;
+                        if (v.Y < _constraintMinY) _constraintMinY = v.Y;
+                        if (v.X > _constraintMaxX) _constraintMaxX = v.X;
+                        if (v.Y > _constraintMaxY) _constraintMaxY = v.Y;
+                    }
                     break;
                 }
             }
@@ -1187,6 +1199,8 @@ public class RuppertRefiner : IDelaunayRefiner
         // outside the constraint, which then propagate interior flags and cause runaway escape.
         if (_refineOnlyInsideConstraints && _hasConstraints && _constraintPolygonVertices != null)
         {
+            if (ox < _constraintMinX || ox > _constraintMaxX || oy < _constraintMinY || oy > _constraintMaxY)
+                return null;
             var pip = Utils.Polyside.IsPointInPolygon(_constraintPolygonVertices, ox, oy);
             if (pip == Utils.Polyside.Result.Outside)
                 return null;
@@ -1225,6 +1239,8 @@ public class RuppertRefiner : IDelaunayRefiner
 
         if (_refineOnlyInsideConstraints && _hasConstraints && _constraintPolygonVertices != null)
         {
+            if (center.X < _constraintMinX || center.X > _constraintMaxX || center.Y < _constraintMinY || center.Y > _constraintMaxY)
+                return null;
             var pip = Utils.Polyside.IsPointInPolygon(_constraintPolygonVertices, center.X, center.Y);
             if (pip == Utils.Polyside.Result.Outside)
                 return null;
