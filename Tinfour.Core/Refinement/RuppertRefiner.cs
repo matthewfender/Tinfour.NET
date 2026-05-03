@@ -118,6 +118,9 @@ public class RuppertRefiner : IDelaunayRefiner
     private IVertex? _lastInsertedVertex;
     private int _vertexIndexer;
 
+    // Reusable circumcircle instance to avoid allocations in hot path
+    private readonly Circumcircle _reusableCircumcircle = new Circumcircle();
+
     // Original bounds at start of refinement - used for sanity checking
     private double _originalMaxCoord;
     private bool _originalBoundsSet;
@@ -321,7 +324,8 @@ public class RuppertRefiner : IDelaunayRefiner
         }
 
         // Initialize collections with reference equality comparison for edges
-        _vdata = new Dictionary<IVertex, VData>(ReferenceEqualityComparer.Instance);
+        var initialCapacity = tin.GetVertices().Count * 4;
+        _vdata = new Dictionary<IVertex, VData>(initialCapacity, ReferenceEqualityComparer.Instance);
         _cornerInfo = new Dictionary<IVertex, CornerInfo>(ReferenceEqualityComparer.Instance);
         _constrainedSegments = new HashSet<IQuadEdge>(ReferenceEqualityComparer.Instance);
         _badTriangles = new PriorityQueue<BadTri, double>();
@@ -423,12 +427,12 @@ public class RuppertRefiner : IDelaunayRefiner
 
         while (skippedThisCall < maxSkipsPerCall)
         {
-            var bad = NextBadTriangleFromQueue();
-            if (bad == null)
+            var badEdge = NextBadEdgeFromQueue();
+            if (badEdge == null)
                 return null; // No more bad triangles - done
 
             // Try to insert offcenter or split
-            var result = InsertOffcenterOrSplit(bad);
+            var result = InsertOffcenterOrSplit(badEdge);
             if (result != null)
                 return result; // Success
 
@@ -1074,7 +1078,7 @@ public class RuppertRefiner : IDelaunayRefiner
 
     #region Insertion Methods
 
-    private SimpleTriangle? NextBadTriangleFromQueue()
+    private IQuadEdge? NextBadEdgeFromQueue()
     {
         while (_badTriangles.Count > 0)
         {
@@ -1084,20 +1088,22 @@ public class RuppertRefiner : IDelaunayRefiner
             // Remove from deduplication set
             _inBadTriangleQueue.Remove(rep.GetBaseIndex());
 
-            var t = new SimpleTriangle(rep);
-            var p = TriangleBadPriority(t);
+            var p = TriangleBadPriorityFromEdge(rep);
             if (p > 0.0)
-                return t;
+                return rep;
         }
 
         return null;
     }
 
-    private IVertex? InsertOffcenterOrSplit(SimpleTriangle tri)
+    private IVertex? InsertOffcenterOrSplit(IQuadEdge repEdge)
     {
-        var a = tri.GetVertexA();
-        var b = tri.GetVertexB();
-        var c = tri.GetVertexC();
+        var eA = repEdge;
+        var eB = repEdge.GetForward();
+        var eC = repEdge.GetReverse();
+        var a = eC.GetA();  // VertexA
+        var b = eA.GetA();  // VertexB
+        var c = eB.GetA();  // VertexC
 
         // Sanity check: verify input triangle has reasonable coordinates using original bounds
         if (_originalBoundsSet)
@@ -1128,7 +1134,7 @@ public class RuppertRefiner : IDelaunayRefiner
 
         var len = Math.Sqrt(p.GetDistanceSq(q.X, q.Y));
         if (len <= 0)
-            return InsertCircumcenterOrSplit(tri);
+            return InsertCircumcenterOrSplit(repEdge, a, b, c);
 
         var mx = 0.5 * (p.X + q.X);
         var my = 0.5 * (p.Y + q.Y);
@@ -1138,17 +1144,17 @@ public class RuppertRefiner : IDelaunayRefiner
         var ny = q.X - p.X;
         var nlen = Hypot(nx, ny);
         if (nlen == 0)
-            return InsertCircumcenterOrSplit(tri);
+            return InsertCircumcenterOrSplit(repEdge, a, b, c);
 
         nx /= nlen;
         ny /= nlen;
 
-        var cc = tri.GetCircumcircle();
-        if (cc == null)
-            return InsertCircumcenterOrSplit(tri);
+        // Compute circumcircle using reusable instance to avoid allocation
+        if (!_reusableCircumcircle.Compute(a, b, c))
+            return InsertCircumcenterOrSplit(repEdge, a, b, c);
 
-        var cx = cc.GetX();
-        var cy = cc.GetY();
+        var cx = _reusableCircumcircle.GetX();
+        var cy = _reusableCircumcircle.GetY();
         var dCirc = Hypot(cx - mx, cy - my);
 
         var d = Math.Min(dCirc, _beta * len);
@@ -1209,17 +1215,17 @@ public class RuppertRefiner : IDelaunayRefiner
         return off;
     }
 
-    private IVertex? InsertCircumcenterOrSplit(SimpleTriangle tri)
+    private IVertex? InsertCircumcenterOrSplit(IQuadEdge repEdge, IVertex a, IVertex b, IVertex c)
     {
-        var cc = tri.GetCircumcircle();
-        if (cc == null)
+        // Compute circumcircle using reusable instance to avoid allocation
+        if (!_reusableCircumcircle.Compute(a, b, c))
             return null;
 
-        var center = new Vertex(cc.GetX(), cc.GetY(), 0);
+        var center = new Vertex(_reusableCircumcircle.GetX(), _reusableCircumcircle.GetY(), 0);
 
         if (_refineOnlyInsideConstraints && _hasConstraints && _constraintPolygonVertices != null)
         {
-            var pip = Utils.Polyside.IsPointInPolygon(_constraintPolygonVertices, cc.GetX(), cc.GetY());
+            var pip = Utils.Polyside.IsPointInPolygon(_constraintPolygonVertices, center.X, center.Y);
             if (pip == Utils.Polyside.Result.Outside)
                 return null;
         }
@@ -1228,8 +1234,12 @@ public class RuppertRefiner : IDelaunayRefiner
         if (enc != null)
             return SplitSegmentSmart(enc);
 
-        var shortestEdge = tri.GetShortestEdge();
-        var localScale = Math.Max(1e-12, shortestEdge?.GetLength() ?? 1.0);
+        // Compute shortest edge length from squared distances (avoids edge object traversal)
+        var ab2 = a.GetDistanceSq(b.X, b.Y);
+        var bc2 = b.GetDistanceSq(c.X, c.Y);
+        var ca2 = c.GetDistanceSq(a.X, a.Y);
+        var shortestLen = Math.Sqrt(Math.Min(ab2, Math.Min(bc2, ca2)));
+        var localScale = Math.Max(1e-12, shortestLen);
         var nearVertexTol = NearVertexRelTol * localScale;
         var nearEdgeTol = NearEdgeRelTol * localScale;
 
@@ -1250,9 +1260,6 @@ public class RuppertRefiner : IDelaunayRefiner
             // Fallback if interpolation fails (point outside original TIN)
             if (double.IsNaN(cz))
             {
-                var a = tri.GetVertexA();
-                var b = tri.GetVertexB();
-                var c = tri.GetVertexC();
                 cz = (a.GetZ() + b.GetZ() + c.GetZ()) / 3.0;
             }
         }
@@ -1332,15 +1339,19 @@ public class RuppertRefiner : IDelaunayRefiner
             // The returned edge has A == v, so we can use it directly as the seed
             var pinwheelCount = 0;
             const int maxPinwheel = 1000;
-            foreach (var e in insertedEdge.GetPinwheel())
+            var current = insertedEdge;
+            do
             {
                 if (++pinwheelCount > maxPinwheel)
                     break;
 
-                var opposite = e.GetForward();
+                var opposite = current.GetForward();
                 if (opposite.IsConstrained() && ClosestEncroacherOrNull(opposite) != null)
                     AddEncroachmentCandidate(opposite);
-            }
+
+                current = current.GetDualFromReverse();
+                if (current == null) break;
+            } while (!ReferenceEquals(current, insertedEdge));
 
             if (_badTrianglesInitialized)
                 UpdateBadTrianglesAroundVertexFromEdge(v, insertedEdge);
@@ -1363,15 +1374,19 @@ public class RuppertRefiner : IDelaunayRefiner
                 {
                     var pinwheelCount = 0;
                     const int maxPinwheel = 1000;
-                    foreach (var e in seed.GetPinwheel())
+                    var current = seed;
+                    do
                     {
                         if (++pinwheelCount > maxPinwheel)
                             break;
 
-                        var opposite = e.GetForward();
+                        var opposite = current.GetForward();
                         if (opposite.IsConstrained() && ClosestEncroacherOrNull(opposite) != null)
                             AddEncroachmentCandidate(opposite);
-                    }
+
+                        current = current.GetDualFromReverse();
+                        if (current == null) break;
+                    } while (!ReferenceEquals(current, seed));
                 }
             }
 
@@ -1410,16 +1425,20 @@ public class RuppertRefiner : IDelaunayRefiner
 
         var pinwheelCount = 0;
         const int maxPinwheel = 1000; // Safety limit
-        foreach (var e in seed.GetPinwheel())
+        var current = seed;
+        do
         {
             if (++pinwheelCount > maxPinwheel)
                 break;
 
             // Use edge-based method to avoid SimpleTriangle allocation
-            var p = TriangleBadPriorityFromEdge(e);
+            var p = TriangleBadPriorityFromEdge(current);
             if (p > 0.0)
-                EnqueueBadTriangle(e, p);
-        }
+                EnqueueBadTriangle(current, p);
+
+            current = current.GetDualFromReverse();
+            if (current == null) break;
+        } while (!ReferenceEquals(current, seed));
     }
 
     /// <summary>
@@ -1430,16 +1449,20 @@ public class RuppertRefiner : IDelaunayRefiner
     {
         var pinwheelCount = 0;
         const int maxPinwheel = 1000; // Safety limit
-        foreach (var e in seed.GetPinwheel())
+        var current = seed;
+        do
         {
             if (++pinwheelCount > maxPinwheel)
                 break;
 
             // Use edge-based method to avoid SimpleTriangle allocation
-            var p = TriangleBadPriorityFromEdge(e);
+            var p = TriangleBadPriorityFromEdge(current);
             if (p > 0.0)
-                EnqueueBadTriangle(e, p);
-        }
+                EnqueueBadTriangle(current, p);
+
+            current = current.GetDualFromReverse();
+            if (current == null) break;
+        } while (!ReferenceEquals(current, seed));
     }
 
     /// <summary>
@@ -1515,22 +1538,26 @@ public class RuppertRefiner : IDelaunayRefiner
 
         var pinwheelCount = 0;
         const int maxPinwheel = 1000;
-        foreach (var e in seed.GetPinwheel())
+        var current = seed;
+        do
         {
             if (++pinwheelCount > maxPinwheel)
                 break;
 
-            if (e.IsConstrained())
+            if (current.IsConstrained())
             {
-                _constrainedSegments.Add(e.GetBaseReference());
-                if (ClosestEncroacherOrNull(e) != null)
-                    AddEncroachmentCandidate(e);
+                _constrainedSegments.Add(current.GetBaseReference());
+                if (ClosestEncroacherOrNull(current) != null)
+                    AddEncroachmentCandidate(current);
             }
 
-            var opposite = e.GetForward();
+            var opposite = current.GetForward();
             if (opposite.IsConstrained() && ClosestEncroacherOrNull(opposite) != null)
                 AddEncroachmentCandidate(opposite);
-        }
+
+            current = current.GetDualFromReverse();
+            if (current == null) break;
+        } while (!ReferenceEquals(current, seed));
     }
 
     #endregion
