@@ -8,7 +8,7 @@ using Tinfour.Core.Standard;
 
 // Run in Release, single thread, with memory diagnoser
 [MemoryDiagnoser]
-[SimpleJob(RuntimeMoniker.Net80, 1, 1, 3)]
+[SimpleJob(launchCount: 1, warmupCount: 1, iterationCount: 3)]
 public class IncrementalTinBenchmarks
 {
     [Params(1_000, 10_000, 100_000 /*, 1_000_000*/)]

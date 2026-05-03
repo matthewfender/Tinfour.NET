@@ -38,7 +38,7 @@ public struct RefinementResult
 ///     Tests constrained scenarios representing real-world usage.
 /// </summary>
 [MemoryDiagnoser]
-[SimpleJob(RuntimeMoniker.Net80, 1, 1, 3)]
+[SimpleJob(launchCount: 1, warmupCount: 1, iterationCount: 3)]
 public class RuppertRefinementBenchmarks
 {
     /// <summary>
@@ -340,7 +340,7 @@ public class RuppertRefinementBenchmarks
 ///     Uses smaller iteration counts for quick profiling.
 /// </summary>
 [MemoryDiagnoser]
-[SimpleJob(RuntimeMoniker.Net80, 1, 1, 2)]
+[SimpleJob(launchCount: 1, warmupCount: 1, iterationCount: 2)]
 public class RuppertRefinementDetailedBenchmarks
 {
     private IncrementalTin _tin = null!;
@@ -451,7 +451,7 @@ public enum ZInterpolationMode
 ///     that require significant refinement work. Targets 5-30 second run times.
 /// </summary>
 [MemoryDiagnoser]
-[SimpleJob(RuntimeMoniker.Net80, 1, 1, 3)]
+[SimpleJob(launchCount: 1, warmupCount: 1, iterationCount: 3)]
 public class RuppertInterpolationImpactBenchmarks
 {
     private IncrementalTin _tin = null!;
@@ -578,7 +578,7 @@ public class RuppertInterpolationImpactBenchmarks
 ///     creating many skinny triangles inside a shoreline constraint.
 /// </summary>
 [MemoryDiagnoser]
-[SimpleJob(RuntimeMoniker.Net80, 1, 1, 3)]
+[SimpleJob(launchCount: 1, warmupCount: 1, iterationCount: 3)]
 public class RuppertRealWorldBenchmarks
 {
     private IncrementalTin _tin = null!;

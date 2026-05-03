@@ -16,7 +16,7 @@ using Tinfour.Core.Standard;
 ///     extended to test new approaches and optimizations for TIN data extraction.
 /// </remarks>
 [MemoryDiagnoser]
-[SimpleJob(RuntimeMoniker.Net80, 1, 2, 5)]
+[SimpleJob(launchCount: 1, warmupCount: 2, iterationCount: 5)]
 [RPlotExporter]
 public class TinUtilitiesBenchmarks
 {

@@ -36,7 +36,7 @@ public struct InterpolationResult
 ///     TIN sizes, vertex counts, and interpolation types.
 /// </summary>
 [MemoryDiagnoser]
-[SimpleJob(RuntimeMoniker.Net80, 1, 1, 3)]
+[SimpleJob(launchCount: 1, warmupCount: 1, iterationCount: 3)]
 [RPlotExporter]
 public class InterpolationBenchmarks
 {

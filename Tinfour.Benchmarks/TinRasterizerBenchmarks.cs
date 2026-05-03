@@ -26,7 +26,7 @@ using Tinfour.Core.Standard;
 ///     Benchmarks for TinRasterizer performance with StochasticLawsonsWalk optimizations.
 /// </summary>
 [MemoryDiagnoser]
-[SimpleJob(RuntimeMoniker.Net80, 1, 1, 3)]
+[SimpleJob(launchCount: 1, warmupCount: 1, iterationCount: 3)]
 public class TinRasterizerBenchmarks
 {
     [Params(1000, 2500)]
