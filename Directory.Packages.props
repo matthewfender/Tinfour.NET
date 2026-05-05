@@ -11,7 +11,7 @@
     <PackageVersion Include="xunit.runner.visualstudio" Version="2.8.1" />
     <PackageVersion Include="coverlet.collector" Version="6.0.2" />
     <!-- Benchmark packages -->
-    <PackageVersion Include="BenchmarkDotNet" Version="0.13.12" />
+    <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
     <!-- Avalonia packages -->
     <!-- Important: keep version in sync! -->
     <PackageVersion Include="Avalonia" Version="11.3.4" />
