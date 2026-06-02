@@ -1306,21 +1306,13 @@ public class RuppertRefiner : IDelaunayRefiner
         var mx = (a.X + b.X) * 0.5;
         var my = (a.Y + b.Y) * 0.5;
 
-        // Use TIN interpolation for Z instead of linear interpolation along the edge.
-        // This ensures constraint edges "drape" over the terrain rather than cutting
-        // through it in a straight line between potentially distant endpoints.
-        double z;
-        if (_interpolateZ && _interpolator != null)
-        {
-            z = _interpolator.Interpolate(mx, my, null);
-            // Fallback to linear interpolation if TIN interpolation fails
-            if (double.IsNaN(z))
-                z = (a.GetZ() + b.GetZ()) * 0.5;
-        }
-        else
-        {
-            z = (a.GetZ() + b.GetZ()) * 0.5;
-        }
+        // The split point lies ON a constraint segment, so its Z must be interpolated
+        // LINEARLY between the segment's two endpoints — honouring the constraint's own
+        // depth profile (e.g. a shoreline at 0 m). A general surface interpolation would
+        // pull surrounding terrain depths onto the constraint and create spurious vertical
+        // steps along it. (Interior Steiner points, which are not on constraints, are
+        // inserted elsewhere and correctly follow the surface.)
+        var z = (a.GetZ() + b.GetZ()) * 0.5;
 
         // Remove old segment from our set
         var baseSeg = seg.GetBaseReference();
