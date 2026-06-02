@@ -118,6 +118,14 @@ public class IncrementalTin : IIncrementalTin
     /// </summary>
     private int _maxLengthOfQueueInFloodFill;
 
+    /// <summary>
+    ///     Interpolator over the original input surface, used to "drape" the Z value of
+    ///     split points on no-depth constraint edges (see
+    ///     <see cref="ConstraintSplitInterpolation"/>). Set during constraint
+    ///     pre-interpolation; null when pre-interpolation is disabled.
+    /// </summary>
+    private IInterpolatorOverTin? _constraintEdgeInterpolator;
+
     private int _nSyntheticVertices;
 
     /// <summary>
@@ -347,6 +355,9 @@ public class IncrementalTin : IIncrementalTin
             interpolationTin.Add(originalVertices);
 
             interpolator = InterpolatorFactory.Create(interpolationTin, interpolationType);
+            // Retained for draping the Z of no-depth constraint-edge splits during
+            // conformity restoration (depth-bearing constraints split linearly instead).
+            _constraintEdgeInterpolator = interpolator;
         }
 
         foreach (var cIn in constraints)
@@ -378,11 +389,11 @@ public class IncrementalTin : IIncrementalTin
                             // If interpolation succeeds, use the value. Otherwise keep NaN.
                             if (!double.IsNaN(z))
                             {
-                                // Create new vertex with interpolated Z, preserving other attributes if possible
-                                // Note: We lose auxiliary/status bits here if we just use new Vertex(...)
-                                // But usually constraint vertices are fresh.
-                                // Let's try to preserve index.
-                                newVertices.Add(new Vertex(v.X, v.Y, z, v.GetIndex()));
+                                // Create new vertex with interpolated Z, flagged so that
+                                // constraint-edge splits on this no-depth vertex drape over
+                                // the surface rather than interpolating a defining depth.
+                                // (Preserve index; other status bits are not significant here.)
+                                newVertices.Add(new Vertex(v.X, v.Y, z, v.GetIndex()).WithInterpolatedZ(true));
                             }
                             else
                             {
@@ -814,10 +825,14 @@ public class IncrementalTin : IIncrementalTin
         // Create the new vertex
         var m = new Vertex(mx, my, z, _nSyntheticVertices++);
 
-        // Inherit constraint status if the edge is constrained
+        // Inherit constraint status if the edge is constrained, and propagate the
+        // interpolated-Z (no-depth) flag so deeper splits of a no-depth constraint
+        // section keep draping over the surface rather than falling back to linear.
         if (ab.IsConstrained())
         {
-            m = m.WithStatus(Vertex.BitSynthetic | Vertex.BitConstraint);
+            var status = Vertex.BitSynthetic | Vertex.BitConstraint;
+            if (ConstraintSplitInterpolation.ShouldDrape(a, b)) status |= Vertex.BitInterpolatedZ;
+            m = m.WithStatus(status);
         }
         else
         {
@@ -1591,17 +1606,16 @@ public class IncrementalTin : IIncrementalTin
             var mx = (a.X + b.X) / 2.0;
             var my = (a.Y + b.Y) / 2.0;
 
-            // Interpolate the split midpoint's Z LINEARLY between the two surrounding
-            // constraint vertices. A constraint defines its own depth profile (e.g. a
-            // shoreline at 0 m), so a split point that lies on the constraint edge must
-            // honour that profile — it must NOT take a general surface-interpolated depth,
-            // which would pull surrounding terrain depths onto the constraint and create
-            // spurious vertical steps along it. (Filling constraint VERTICES whose Z is NaN
-            // is handled separately by pre-interpolation before triangulation.)
-            var mz = (a.GetZ() + b.GetZ()) / 2.0;
+            // Constraint-edge split Z: linear between the two constraint vertices for a
+            // depth-bearing constraint (preserve its own profile, e.g. a 0 m shoreline);
+            // surface-draped for a no-depth (interpolated-Z) constraint so a region/clip
+            // boundary follows the terrain instead of carving features into it.
+            var mz = ConstraintSplitInterpolation.ComputeSplitZ(a, b, mx, my, _constraintEdgeInterpolator);
 
             var m = new Vertex(mx, my, mz, _nSyntheticVertices++);
-            m = m.WithStatus(Vertex.BitSynthetic | Vertex.BitConstraint);
+            var mStatus = Vertex.BitSynthetic | Vertex.BitConstraint;
+            if (ConstraintSplitInterpolation.ShouldDrape(a, b)) mStatus |= Vertex.BitInterpolatedZ;
+            m = m.WithStatus(mStatus);
 
             // Split the edge ab by inserting midpoint m
             // ab becomes the second segment (m->b), the new edge is the first segment (a->m)

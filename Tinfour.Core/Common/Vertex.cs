@@ -66,6 +66,15 @@ public sealed class Vertex : IVertex
     public const int BitWithheld = 0x04;
 
     /// <summary>
+    ///     A bit flag indicating that the vertex's Z value was interpolated from the
+    ///     surrounding surface (e.g. a constraint vertex created without a depth and filled
+    ///     by pre-interpolation) rather than supplied as a defining value. Constraint-edge
+    ///     splits on such vertices "drape" over the terrain instead of interpolating a
+    ///     defining depth linearly between the endpoints.
+    /// </summary>
+    public const int BitInterpolatedZ = 0x08;
+
+    /// <summary>
     ///     A special marker bit indicating this is the null vertex.
     /// </summary>
     private const int BitNull = 0x80;
@@ -374,6 +383,38 @@ public sealed class Vertex : IVertex
     public bool IsWithheld()
     {
         return (_status & BitWithheld) != 0;
+    }
+
+    /// <summary>
+    ///     Indicates whether the vertex's Z value was interpolated from the surrounding
+    ///     surface rather than supplied as a defining value (see <see cref="BitInterpolatedZ"/>).
+    /// </summary>
+    /// <returns>True if the vertex's Z was interpolated; otherwise, false</returns>
+    public bool HasInterpolatedZ()
+    {
+        return (_status & BitInterpolatedZ) != 0;
+    }
+
+    /// <summary>
+    ///     Creates a new vertex with the specified interpolated-Z status, preserving all
+    ///     other status bits.
+    /// </summary>
+    /// <param name="interpolatedZ">True if the vertex's Z was interpolated; otherwise, false</param>
+    /// <returns>A new vertex with the updated interpolated-Z status.</returns>
+    public Vertex WithInterpolatedZ(bool interpolatedZ)
+    {
+        var status = _status;
+        if (interpolatedZ) status |= BitInterpolatedZ;
+        else status &= unchecked((byte)~BitInterpolatedZ);
+        return new Vertex(
+            X,
+            Y,
+            _z,
+            _index,
+            status,
+            _auxiliary,
+            _reserved0,
+            _reserved1);
     }
 
     /// <summary>

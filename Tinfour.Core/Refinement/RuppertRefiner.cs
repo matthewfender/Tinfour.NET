@@ -1306,13 +1306,14 @@ public class RuppertRefiner : IDelaunayRefiner
         var mx = (a.X + b.X) * 0.5;
         var my = (a.Y + b.Y) * 0.5;
 
-        // The split point lies ON a constraint segment, so its Z must be interpolated
-        // LINEARLY between the segment's two endpoints — honouring the constraint's own
-        // depth profile (e.g. a shoreline at 0 m). A general surface interpolation would
-        // pull surrounding terrain depths onto the constraint and create spurious vertical
-        // steps along it. (Interior Steiner points, which are not on constraints, are
-        // inserted elsewhere and correctly follow the surface.)
-        var z = (a.GetZ() + b.GetZ()) * 0.5;
+        // Constraint-edge split Z: linear between the segment's two constraint vertices for
+        // a depth-bearing constraint (preserve its own profile, e.g. a 0 m shoreline);
+        // surface-draped for a no-depth (interpolated-Z) constraint so a region/clip boundary
+        // follows the terrain. Interior Steiner points (not on constraints) are inserted
+        // elsewhere and follow the surface. The midpoint inherits the no-depth flag via
+        // _tin.SplitEdge, so deeper splits of a no-depth section keep draping.
+        var z = ConstraintSplitInterpolation.ComputeSplitZ(a, b, mx, my,
+            _interpolateZ ? _interpolator : null);
 
         // Remove old segment from our set
         var baseSeg = seg.GetBaseReference();
