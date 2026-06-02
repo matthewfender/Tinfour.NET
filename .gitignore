@@ -376,3 +376,6 @@ FodyWeavers.xsd
 /Tinfour.Core/CODE_AUDIT.md
 /.claude/settings.local.json
 /Tinfour.PrecisionEval
+
+# GSD planning docs (commit_docs:false)
+/.planning/
