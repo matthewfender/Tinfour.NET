@@ -118,13 +118,6 @@ public class IncrementalTin : IIncrementalTin
     /// </summary>
     private int _maxLengthOfQueueInFloodFill;
 
-    /// <summary>
-    ///     Interpolator for computing Z values during constraint edge splits.
-    ///     Built on the original TIN (before constraints) to ensure Z values are
-    ///     interpolated from the true input surface, not from synthetic vertices.
-    /// </summary>
-    private IInterpolatorOverTin? _constraintEdgeInterpolator;
-
     private int _nSyntheticVertices;
 
     /// <summary>
@@ -354,8 +347,6 @@ public class IncrementalTin : IIncrementalTin
             interpolationTin.Add(originalVertices);
 
             interpolator = InterpolatorFactory.Create(interpolationTin, interpolationType);
-            // Store for use during RestoreConformity edge splits
-            _constraintEdgeInterpolator = interpolator;
         }
 
         foreach (var cIn in constraints)
@@ -1600,21 +1591,14 @@ public class IncrementalTin : IIncrementalTin
             var mx = (a.X + b.X) / 2.0;
             var my = (a.Y + b.Y) / 2.0;
 
-            // Use TIN interpolation for Z instead of linear interpolation along the edge.
-            // This ensures constraint edges "drape" over the terrain rather than cutting
-            // through it in a straight line between potentially distant endpoints.
-            double mz;
-            if (_constraintEdgeInterpolator != null)
-            {
-                mz = _constraintEdgeInterpolator.Interpolate(mx, my, null);
-                // Fallback to linear interpolation if TIN interpolation fails
-                if (double.IsNaN(mz))
-                    mz = (a.GetZ() + b.GetZ()) / 2.0;
-            }
-            else
-            {
-                mz = (a.GetZ() + b.GetZ()) / 2.0;
-            }
+            // Interpolate the split midpoint's Z LINEARLY between the two surrounding
+            // constraint vertices. A constraint defines its own depth profile (e.g. a
+            // shoreline at 0 m), so a split point that lies on the constraint edge must
+            // honour that profile — it must NOT take a general surface-interpolated depth,
+            // which would pull surrounding terrain depths onto the constraint and create
+            // spurious vertical steps along it. (Filling constraint VERTICES whose Z is NaN
+            // is handled separately by pre-interpolation before triangulation.)
+            var mz = (a.GetZ() + b.GetZ()) / 2.0;
 
             var m = new Vertex(mx, my, mz, _nSyntheticVertices++);
             m = m.WithStatus(Vertex.BitSynthetic | Vertex.BitConstraint);
