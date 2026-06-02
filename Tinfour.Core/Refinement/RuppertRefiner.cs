@@ -125,9 +125,31 @@ public class RuppertRefiner : IDelaunayRefiner
     private double _originalMaxCoord;
     private bool _originalBoundsSet;
 
-    // Constraint polygon vertices for geometric containment checks during refinement
-    private IList<IVertex>? _constraintPolygonVertices;
-    private double _constraintMinX, _constraintMinY, _constraintMaxX, _constraintMaxY;
+    // Constraint polygon data for geometric containment checks during refinement.
+    // Supports multiple non-hole constraint polygons so refinement works across all regions.
+    private readonly struct ConstraintPolygonData
+    {
+        public readonly IList<IVertex> Vertices;
+        public readonly double MinX, MinY, MaxX, MaxY;
+
+        public ConstraintPolygonData(IList<IVertex> vertices)
+        {
+            Vertices = vertices;
+            MinX = double.MaxValue;
+            MinY = double.MaxValue;
+            MaxX = double.MinValue;
+            MaxY = double.MinValue;
+            foreach (var v in vertices)
+            {
+                if (v.X < MinX) MinX = v.X;
+                if (v.Y < MinY) MinY = v.Y;
+                if (v.X > MaxX) MaxX = v.X;
+                if (v.Y > MaxY) MaxY = v.Y;
+            }
+        }
+    }
+
+    private readonly List<ConstraintPolygonData> _constraintPolygons = new();
 
     #endregion
 
@@ -309,28 +331,16 @@ public class RuppertRefiner : IDelaunayRefiner
         // Cache whether the TIN has constraints to avoid GetConstraints() call in hot path
         var constraints = tin.GetConstraints();
         _hasConstraints = constraints.Count > 0;
-        // Cache the first polygon constraint's vertices for geometric containment checks.
-        // This prevents Steiner points from being inserted outside the constraint polygon,
-        // which is the root cause of the refinement escape bug.
+        // Cache ALL non-hole polygon constraints for geometric containment checks.
+        // This prevents Steiner points from being inserted outside constraint polygons,
+        // and ensures refinement works across all constraint regions (not just the first).
         if (_hasConstraints && _refineOnlyInsideConstraints)
         {
             foreach (var con in constraints)
             {
                 if (con is PolygonConstraint poly && !poly.IsHole())
                 {
-                    _constraintPolygonVertices = poly.GetVertices();
-                    _constraintMinX = double.MaxValue;
-                    _constraintMinY = double.MaxValue;
-                    _constraintMaxX = double.MinValue;
-                    _constraintMaxY = double.MinValue;
-                    foreach (var v in _constraintPolygonVertices)
-                    {
-                        if (v.X < _constraintMinX) _constraintMinX = v.X;
-                        if (v.Y < _constraintMinY) _constraintMinY = v.Y;
-                        if (v.X > _constraintMaxX) _constraintMaxX = v.X;
-                        if (v.Y > _constraintMaxY) _constraintMaxY = v.Y;
-                    }
-                    break;
+                    _constraintPolygons.Add(new ConstraintPolygonData(poly.GetVertices()));
                 }
             }
         }
@@ -1194,15 +1204,12 @@ public class RuppertRefiner : IDelaunayRefiner
         var off = new Vertex(ox, oy, oz, _vertexIndexer++);
         off = off.WithSynthetic(true);
 
-        // Geometric containment check: reject offcenter if it falls outside the constraint polygon.
+        // Geometric containment check: reject offcenter if it falls outside ALL constraint polygons.
         // This prevents the cascade where boundary-straddling triangles generate Steiner points
         // outside the constraint, which then propagate interior flags and cause runaway escape.
-        if (_refineOnlyInsideConstraints && _hasConstraints && _constraintPolygonVertices != null)
+        if (_refineOnlyInsideConstraints && _hasConstraints && _constraintPolygons.Count > 0)
         {
-            if (ox < _constraintMinX || ox > _constraintMaxX || oy < _constraintMinY || oy > _constraintMaxY)
-                return null;
-            var pip = Utils.Polyside.IsPointInPolygon(_constraintPolygonVertices, ox, oy);
-            if (pip == Utils.Polyside.Result.Outside)
+            if (!IsInsideAnyConstraintPolygon(ox, oy))
                 return null;
         }
 
@@ -1237,12 +1244,9 @@ public class RuppertRefiner : IDelaunayRefiner
 
         var center = new Vertex(_reusableCircumcircle.GetX(), _reusableCircumcircle.GetY(), 0);
 
-        if (_refineOnlyInsideConstraints && _hasConstraints && _constraintPolygonVertices != null)
+        if (_refineOnlyInsideConstraints && _hasConstraints && _constraintPolygons.Count > 0)
         {
-            if (center.X < _constraintMinX || center.X > _constraintMaxX || center.Y < _constraintMinY || center.Y > _constraintMaxY)
-                return null;
-            var pip = Utils.Polyside.IsPointInPolygon(_constraintPolygonVertices, center.X, center.Y);
-            if (pip == Utils.Polyside.Result.Outside)
+            if (!IsInsideAnyConstraintPolygon(center.X, center.Y))
                 return null;
         }
 
@@ -1650,6 +1654,24 @@ public class RuppertRefiner : IDelaunayRefiner
     private IVertex? NearestNeighbor(double x, double y)
     {
         return _navigator.GetNearestVertex(x, y);
+    }
+
+    /// <summary>
+    ///     Checks if a point is inside any of the cached non-hole constraint polygons.
+    ///     Uses bounding box pre-check for fast rejection before the full PIP test.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool IsInsideAnyConstraintPolygon(double x, double y)
+    {
+        foreach (var cp in _constraintPolygons)
+        {
+            if (x < cp.MinX || x > cp.MaxX || y < cp.MinY || y > cp.MaxY)
+                continue;
+            var pip = Utils.Polyside.IsPointInPolygon(cp.Vertices, x, y);
+            if (pip != Utils.Polyside.Result.Outside)
+                return true;
+        }
+        return false;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
