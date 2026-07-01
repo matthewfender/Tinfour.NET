@@ -65,13 +65,14 @@ public class IncrementalTinNavigator : IIncrementalTinNavigator
     {
         if (!_tin.IsBootstrapped()) throw new InvalidOperationException("TIN is not bootstrapped");
 
-        // Get a starting edge if we don't have one
+        // Get a starting edge if we don't have one. Use the streaming iterator rather than
+        // GetEdges(): the latter materialises a full List of every edge (~240 MB for a 10M-vertex
+        // TIN) just to read element 0 — and rasterization creates one navigator per worker
+        // thread, multiplying that transient by the core count.
         if (_searchEdge == null)
         {
-            var edges = _tin.GetEdges();
-            if (edges.Count == 0) throw new InvalidOperationException("No edges available in TIN");
-
-            _searchEdge = edges[0];
+            _searchEdge = _tin.GetEdgeIterator().FirstOrDefault()
+                          ?? throw new InvalidOperationException("No edges available in TIN");
         }
 
         // Use the walker to find the containing triangle
