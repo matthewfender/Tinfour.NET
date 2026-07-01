@@ -348,6 +348,9 @@ public class IncrementalTin : IIncrementalTin
         // an interpolator built directly on `this`. The copy preserves the original triangulation
         // structure for accurate interpolation during RestoreConformity edge splits.
         IInterpolatorOverTin? interpolator = null;
+        // Navigator over the same interpolation TIN, used to extrapolate a Z for constraint
+        // vertices that fall OUTSIDE the data convex hull (where facet interpolation returns NaN).
+        IIncrementalTinNavigator? interpolationNavigator = null;
         if (preInterpolateZ)
         {
             var originalVertices = GetVertices().ToList();
@@ -355,6 +358,7 @@ public class IncrementalTin : IIncrementalTin
             interpolationTin.Add(originalVertices);
 
             interpolator = InterpolatorFactory.Create(interpolationTin, interpolationType);
+            interpolationNavigator = interpolationTin.GetNavigator();
             // Retained for draping the Z of no-depth constraint-edge splits during
             // conformity restoration (depth-bearing constraints split linearly instead).
             _constraintEdgeInterpolator = interpolator;
@@ -386,7 +390,19 @@ public class IncrementalTin : IIncrementalTin
                         if (double.IsNaN(v.GetZ()))
                         {
                             var z = interpolator.Interpolate(v.X, v.Y, null);
-                            // If interpolation succeeds, use the value. Otherwise keep NaN.
+                            // If facet interpolation fails, the vertex is outside the data convex
+                            // hull. Extrapolate from the nearest data vertex rather than keeping
+                            // NaN: a NaN-Z vertex left in the TIN silently poisons downstream
+                            // consumers (the contour builder discards any contour that crosses it,
+                            // and mesh construction skips every triangle touching it).
+                            if (double.IsNaN(z))
+                            {
+                                var nearest = interpolationNavigator?.GetNearestVertex(v.X, v.Y);
+                                if (nearest != null && !double.IsNaN(nearest.GetZ()))
+                                    z = nearest.GetZ();
+                            }
+
+                            // If a real Z is now available, use it. Otherwise keep NaN.
                             if (!double.IsNaN(z))
                             {
                                 // Create new vertex with interpolated Z, flagged so that
