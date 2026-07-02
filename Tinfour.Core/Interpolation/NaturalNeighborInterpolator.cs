@@ -84,6 +84,10 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
     // traversal stack and Sibson-weights array per call dominates allocation churn on large
     // rasters. Public methods (GetBowyerWatsonEnvelope, GetSibsonCoordinates) still return
     // freshly allocated collections; only the internal interpolation path uses the scratch.
+    // CONSTRAINT: an IVertexValuator passed to Interpolate() must not call back into this
+    // interpolator instance — the scratch buffers are live while vertex values are read
+    // (all current valuators are precomputed lookups: VertexValuatorDefault, SmoothingFilter,
+    // ReefMaster's NaNFillingValuator).
     private readonly List<IQuadEdge> _envelopeScratch = [];
     private readonly Stack<IQuadEdge> _envelopeStackScratch = new();
     private double[] _weightsScratch = [];
