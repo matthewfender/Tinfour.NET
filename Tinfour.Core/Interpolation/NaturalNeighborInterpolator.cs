@@ -78,6 +78,16 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
     private readonly Circumcircle _pooledC2 = new();
     private readonly Circumcircle _pooledC3 = new();
 
+    // Reusable scratch collections for the Interpolate() hot path. Instances of this class
+    // are single-threaded by design (see the thread-safety remarks on the constructor) and
+    // rasterization calls Interpolate() once per grid cell, so allocating the envelope list,
+    // traversal stack and Sibson-weights array per call dominates allocation churn on large
+    // rasters. Public methods (GetBowyerWatsonEnvelope, GetSibsonCoordinates) still return
+    // freshly allocated collections; only the internal interpolation path uses the scratch.
+    private readonly List<IQuadEdge> _envelopeScratch = [];
+    private readonly Stack<IQuadEdge> _envelopeStackScratch = new();
+    private double[] _weightsScratch = [];
+
     // Tolerance for identical vertices.
     // The tolerance factor for treating closely spaced or identical vertices
     // as a single point.
@@ -215,17 +225,29 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
     /// <returns>A valid, potentially empty, list.</returns>
     public List<IQuadEdge> GetBowyerWatsonEnvelope(double x, double y)
     {
+        var eList = new List<IQuadEdge>();
+        FillBowyerWatsonEnvelope(x, y, eList);
+        return eList;
+    }
+
+    /// <summary>
+    ///     Core implementation of <see cref="GetBowyerWatsonEnvelope"/> that fills a
+    ///     caller-supplied list (cleared first), allowing the interpolation hot path to
+    ///     reuse a scratch list instead of allocating one per query.
+    /// </summary>
+    private void FillBowyerWatsonEnvelope(double x, double y, List<IQuadEdge> eList)
+    {
         // In the logic below, we access the Vertex x and y coordinates directly
         // but we use the GetZ() method to get the z value. Some vertices
         // may actually be VertexMergerGroup instances
-        var eList = new List<IQuadEdge>();
+        eList.Clear();
 
         var locatorEdge = _navigator.GetNeighborEdge(x, y);
 
         if (locatorEdge == null)
 
             // This would happen only if the TIN were not bootstrapped
-            return eList;
+            return;
 
         var e = locatorEdge;
         var f = e.GetForward();
@@ -242,24 +264,24 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
         // the edge v0, v1 will be the perimeter edge and v2 will
         // be the ghost vertex (e.g. a null). In either case, v2 will
         // not be defined. So, if v2 is null, the NNI interpolation is not defined.
-        if (v2.IsNullVertex()) return eList; // empty list, NNI undefined.
+        if (v2.IsNullVertex()) return; // empty list, NNI undefined.
 
         if (v0.GetDistanceSq(x, y) < _vertexTolerance2)
         {
             eList.Add(e);
-            return eList; // edge starting with v0
+            return; // edge starting with v0
         }
 
         if (v1.GetDistanceSq(x, y) < _vertexTolerance2)
         {
             eList.Add(f);
-            return eList; // edge starting with v1
+            return; // edge starting with v1
         }
 
         if (v2.GetDistanceSq(x, y) < _vertexTolerance2)
         {
             eList.Add(r);
-            return eList; // edge starting with v2
+            return; // edge starting with v2
         }
 
         if (e.IsConstrained())
@@ -268,19 +290,19 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
             if (h < _halfPlaneThreshold)
 
                 // (x,y) is on the edge v0, v1)
-                return eList; // empty list, NNI undefined.
+                return; // empty list, NNI undefined.
         }
 
         if (f.IsConstrained())
         {
             h = _geoOp.HalfPlane(v1.X, v1.Y, v2.X, v2.Y, x, y);
-            if (h < _halfPlaneThreshold) return eList; // empty list, NNI undefined.
+            if (h < _halfPlaneThreshold) return; // empty list, NNI undefined.
         }
 
         if (r.IsConstrained())
         {
             h = _geoOp.HalfPlane(v2.X, v2.Y, v0.X, v0.Y, x, y);
-            if (h < _halfPlaneThreshold) return eList; // empty list, NNI undefined.
+            if (h < _halfPlaneThreshold) return; // empty list, NNI undefined.
         }
 
         // ------------------------------------------------------
@@ -297,7 +319,8 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
         // from an inserted vertex if it were added at coordinates (x,y).
         // This array happens to describe a Thiessen Polygon around the
         // inserted vertex.
-        var stack = new Stack<IQuadEdge>();
+        var stack = _envelopeStackScratch;
+        stack.Clear();
         IQuadEdge c, n0, n1;
 
         c = locatorEdge;
@@ -384,8 +407,6 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
                 if (c.Equals(locatorEdge)) break;
             }
         }
-
-        return eList;
     }
 
     /// <summary>
@@ -501,6 +522,23 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
         var nEdge = polygon.Count;
         if (nEdge < 3) return [];
 
+        var weights = new double[nEdge];
+        ComputeSibsonCoordinates(polygon, x, y, weights);
+        return weights;
+    }
+
+    /// <summary>
+    ///     Core implementation of <see cref="GetSibsonCoordinates"/> that writes into a
+    ///     caller-supplied buffer, allowing the interpolation hot path to reuse a scratch
+    ///     array instead of allocating one per query. Requires at least three polygon edges
+    ///     and a buffer at least as long as the polygon edge count; only the first
+    ///     polygon-count elements of the buffer are written.
+    /// </summary>
+    private void ComputeSibsonCoordinates(List<IQuadEdge> polygon, double x, double y, double[] weights)
+    {
+        _areaOfEmbeddedPolygon = 0;
+        var nEdge = polygon.Count;
+
         // The eList contains a series of edges defining the cavity
         // containing the polygon.
         IVertex a, b, c;
@@ -512,7 +550,6 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
         IQuadEdge e0, e1, n, n1;
         double x0, y0, x1, y1, wThiessen, wXY, wDelta;
         double wSum = 0;
-        var weights = new double[nEdge];
 
         for (var i0 = 0; i0 < nEdge; i0++)
         {
@@ -594,8 +631,9 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
             weights[i1] = wDelta;
         }
 
-        // Normalize the weights
-        for (var i = 0; i < weights.Length; i++) weights[i] /= wSum;
+        // Normalize the weights (only the first nEdge elements are in use — the
+        // buffer may be an oversized scratch array)
+        for (var i = 0; i < nEdge; i++) weights[i] /= wSum;
 
         _areaOfEmbeddedPolygon = wSum / 2;
 
@@ -613,8 +651,6 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
         }
 
         _barycentricCoordinateDeviation = Math.Sqrt(xSum * xSum + ySum * ySum);
-
-        return weights;
     }
 
     /// <summary>
@@ -689,7 +725,8 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
                                                             && !locatorEdge.GetReverse().IsConstraintRegionInterior()))
                 return double.NaN;
 
-        var eList = GetBowyerWatsonEnvelope(x, y);
+        var eList = _envelopeScratch;
+        FillBowyerWatsonEnvelope(x, y, eList);
         var nEdge = eList.Count;
         if (nEdge == 0)
 
@@ -704,17 +741,21 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
             return vq.Value(v);
         }
 
+        if (nEdge < 3)
+
+            // Degenerate envelope: Sibson coordinates are undefined.
+            return double.NaN;
+
         _sumN++;
         _sumSides += eList.Count;
 
-        // The eList contains a series of edges defining the cavity
-        // containing the polygon.
-        var w = GetSibsonCoordinates(eList, x, y);
-        if (w == null)
-
-            // The coordinate is on the perimeter, no Barycentric coordinates
-            // are available.
-            return double.NaN;
+        // The eList contains a series of edges defining the cavity containing the
+        // polygon. The weights are computed into a reusable scratch buffer; only the
+        // first nEdge elements are valid.
+        if (_weightsScratch.Length < nEdge)
+            _weightsScratch = new double[Math.Max(nEdge * 2, 32)];
+        ComputeSibsonCoordinates(eList, x, y, _weightsScratch);
+        var w = _weightsScratch;
 
         double zSum = 0;
         double wSum = 0;

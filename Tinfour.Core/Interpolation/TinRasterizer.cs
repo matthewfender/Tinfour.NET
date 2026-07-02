@@ -293,20 +293,44 @@ public class TinRasterizer
             _ => throw new ArgumentOutOfRangeException(nameof(dataType), dataType, "Unknown raster data type")
         };
 
-        // Calculate cell size
-        var cellWidth = areaBounds.Width / calculatedWidth;
-        var cellHeight = areaBounds.Height / calculatedHeight;
+        return CreateRaster(rasterData, areaBounds, cancellationToken);
+    }
 
-        // If constrained regions only, prepare for constraint checking
-        var hasConstrainedRegions = false;
-        if (_constrainedRegionsOnly)
-            hasConstrainedRegions = _tin.GetConstraints().Any((IConstraint c) => c.DefinesConstrainedRegion());
+    /// <summary>
+    ///     Creates a raster by interpolating directly into a caller-provided data sink.
+    /// </summary>
+    /// <param name="rasterData">
+    ///     The storage the interpolated values are written into. Its Width and Height
+    ///     determine the raster dimensions. Callers can supply their own implementation
+    ///     to avoid a library-side grid allocation and a subsequent copy (e.g. writing
+    ///     straight into an application buffer, applying an orientation or sign transform
+    ///     at write time).
+    /// </param>
+    /// <param name="bounds">The bounds of the area to rasterize.</param>
+    /// <param name="cancellationToken">Optional token to cancel the operation.</param>
+    /// <returns>A RasterResult wrapping the supplied sink and associated metadata.</returns>
+    /// <exception cref="InvalidOperationException">Thrown if the TIN is not bootstrapped.</exception>
+    public RasterResult CreateRaster(
+        IRasterData rasterData,
+        (double Left, double Top, double Width, double Height) bounds,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(rasterData);
+
+        if (!_tin.IsBootstrapped()) throw new InvalidOperationException("TIN is not bootstrapped");
+
+        var calculatedWidth = rasterData.Width;
+        var calculatedHeight = rasterData.Height;
+
+        // Calculate cell size
+        var cellWidth = bounds.Width / calculatedWidth;
+        var cellHeight = bounds.Height / calculatedHeight;
 
         // Determine thread count (one per processor core)
         var processorCount = Environment.ProcessorCount;
 
         // Use ThreadLocal for interpolator instances
-        var threadLocalInterpolator = new ThreadLocal<IInterpolatorOverTin>(() =>
+        using var threadLocalInterpolator = new ThreadLocal<IInterpolatorOverTin>(() =>
             _interpolatorOptions != null
                 ? InterpolatorFactory.Create(_tin, _interpolationType, _interpolatorOptions)
                 : InterpolatorFactory.Create(_tin, _interpolationType, _constrainedRegionsOnly));
@@ -339,8 +363,8 @@ public class TinRasterizer
 
                         for (var x = 0; x < calculatedWidth; x++)
                         {
-                            var worldX = areaBounds.Left + (x + 0.5) * cellWidth;
-                            var worldY = areaBounds.Top + (y + 0.5) * cellHeight;
+                            var worldX = bounds.Left + (x + 0.5) * cellWidth;
+                            var worldY = bounds.Top + (y + 0.5) * cellHeight;
 
                             var value = interpolator.Interpolate(worldX, worldY, _valuator);
                             rasterData.SetValue(x, y, value);
@@ -361,7 +385,7 @@ public class TinRasterizer
 
         return new RasterResult(
             rasterData,
-            areaBounds,
+            bounds,
             cellWidth,
             cellHeight,
             totalNoDataCount);
