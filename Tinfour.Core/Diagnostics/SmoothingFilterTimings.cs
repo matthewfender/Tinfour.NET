@@ -57,12 +57,6 @@ public sealed class SmoothingFilterTimings
     public IReadOnlyList<TimeSpan> Passes { get; init; } = Array.Empty<TimeSpan>();
 
     /// <summary>
-    ///     Building the vertex-to-smoothed-Z result dictionary consumed by
-    ///     <see cref="Utils.SmoothingFilter.Value"/>.
-    /// </summary>
-    public TimeSpan ResultMap { get; init; }
-
-    /// <summary>
     ///     Total wall-clock time of the initializer (excludes the final min/max scan
     ///     performed by the <see cref="Utils.SmoothingFilter"/> constructor).
     /// </summary>
@@ -90,7 +84,6 @@ public sealed class SmoothingFilterTimings
                + $"collect={VertexCollection.TotalMilliseconds:F0}ms "
                + $"neighbors={NeighborBuild.TotalMilliseconds:F0}ms "
                + $"passes[{Passes.Count}]={passes}ms "
-               + $"resultMap={ResultMap.TotalMilliseconds:F0}ms "
                + $"total={Total.TotalMilliseconds:F0}ms";
     }
 }
