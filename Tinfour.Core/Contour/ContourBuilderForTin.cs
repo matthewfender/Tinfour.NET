@@ -356,6 +356,10 @@ public class ContourBuilderForTin
     ///     bracket the level (the (zA-z)*(zB-z) &lt; 0 test) and edges with both endpoints
     ///     exactly on the level. Edges with a NaN endpoint value (ghost edges, unresolved
     ///     values) never match, mirroring the NaN-propagating product test they replace.
+    ///     Relies on the valuator being deterministic (same vertex, same value) because the
+    ///     per-level construction phase re-valuates candidate endpoints; every Tinfour
+    ///     valuator satisfies this, and the algorithm has always re-valuated vertices across
+    ///     the scan and contour-following steps.
     /// </summary>
     /// <returns>One candidate list per contour level, in edge-pool order.</returns>
     private List<IQuadEdge>[] BuildLevelCandidates()
