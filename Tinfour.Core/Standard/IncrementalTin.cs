@@ -31,6 +31,7 @@ using System.Collections;
 using System.Diagnostics;
 
 using Tinfour.Core.Common;
+using Tinfour.Core.Diagnostics;
 using Tinfour.Core.Edge;
 using Tinfour.Core.Interpolation;
 using Tinfour.Core.Utils;
@@ -143,6 +144,13 @@ public class IncrementalTin : IIncrementalTin
     ///     bootstrapped, and then discarded.
     /// </summary>
     private List<IVertex>? _vertexList;
+
+    /// <summary>
+    ///     Per-phase wall-clock timings of the most recent <see cref="AddConstraints"/>
+    ///     call, or null if constraints have not been added. Intended for performance
+    ///     attribution logging by callers.
+    /// </summary>
+    public AddConstraintsTimings? LastAddConstraintsTimings { get; private set; }
 
     /// <summary>
     ///     Constructs an incremental TIN using numerical thresholds appropriate for
@@ -321,6 +329,12 @@ public class IncrementalTin : IIncrementalTin
 
         _isConformant = false;
 
+        var totalTimer = Stopwatch.StartNew();
+        var phaseTimer = Stopwatch.StartNew();
+        var seedElapsed = TimeSpan.Zero;
+        var interpolationTinBuildElapsed = TimeSpan.Zero;
+        var interpolationTinVertexCount = 0;
+
         // Phase 0: Add non-NaN constraint vertices to TIN first (if pre-interpolating)
         // This ensures that constraint vertices with real Z values are available as
         // interpolation sources when computing Z for NaN constraint vertices.
@@ -335,6 +349,8 @@ public class IncrementalTin : IIncrementalTin
                         Add(v);
                 }
             }
+
+            seedElapsed = phaseTimer.Elapsed;
         }
 
         // Phase 1: Complete constraints and add all constraint vertices to the TIN, remapping duplicates
@@ -353,16 +369,30 @@ public class IncrementalTin : IIncrementalTin
         IIncrementalTinNavigator? interpolationNavigator = null;
         if (preInterpolateZ)
         {
-            var originalVertices = GetVertices().ToList();
+            phaseTimer.Restart();
+
+            // GetVertices() snapshots via a HashSet, so the list arrives in effectively
+            // random order; an unsorted incremental insertion walk degrades to ~O(n^1.5).
+            // Hilbert ordering + edge-pool preallocation keep this transient rebuild
+            // O(n)-amortized like a caller's sorted primary build. The resulting surface
+            // is the same: identical vertex set, and Delaunay triangulations are unique
+            // for points in general position regardless of insertion order.
+            var originalVertices = GetVertices();
+            interpolationTinVertexCount = originalVertices.Count;
             var interpolationTin = new IncrementalTin(_nominalPointSpacing);
-            interpolationTin.Add(originalVertices);
+            interpolationTin.PreAllocateForVertices(originalVertices.Count);
+            interpolationTin.Add(originalVertices, VertexOrder.Hilbert);
 
             interpolator = InterpolatorFactory.Create(interpolationTin, interpolationType);
             interpolationNavigator = interpolationTin.GetNavigator();
             // Retained for draping the Z of no-depth constraint-edge splits during
             // conformity restoration (depth-bearing constraints split linearly instead).
             _constraintEdgeInterpolator = interpolator;
+
+            interpolationTinBuildElapsed = phaseTimer.Elapsed;
         }
+
+        phaseTimer.Restart();
 
         foreach (var cIn in constraints)
         {
@@ -464,6 +494,9 @@ public class IncrementalTin : IIncrementalTin
             _constraintList.Add(c);
         }
 
+        var interpolateAndInsertElapsed = phaseTimer.Elapsed;
+        phaseTimer.Restart();
+
         // Phase 3: Process constraints using full CDT algorithm
         var processor = new ConstraintProcessor(_edgePool, _geoOp, _thresholds, _walker);
         var edgesForConstraintList = new List<List<IQuadEdge>>(ordered.Count);
@@ -474,14 +507,21 @@ public class IncrementalTin : IIncrementalTin
             _searchEdge = processor.ProcessConstraint(c, eList, _searchEdge);
         }
 
+        var processConstraintsElapsed = phaseTimer.Elapsed;
+        phaseTimer.Restart();
+
         // Phase 4: Lock due to constraints and optionally restore conformity
         _lockedDueToConstraints = true;
+        var syntheticBeforeRestore = _nSyntheticVertices;
         if (restoreConformity)
         {
             foreach (var e in GetEdgeIterator()) RestoreConformity((QuadEdge)e);
 
             _isConformant = true;
         }
+
+        var restoreConformityElapsed = phaseTimer.Elapsed;
+        phaseTimer.Restart();
 
         // Phase 5: Flood fill polygon interiors and set a linking edge
         var visited = new BitArray(_edgePool.GetMaximumAllocationIndex() + 1);
@@ -497,6 +537,19 @@ public class IncrementalTin : IIncrementalTin
         // Mark that flood fill has been performed - this enables constraint sweep
         // operations in RestoreConformity for subsequent edge modifications
         _maxLengthOfQueueInFloodFill = 1;
+
+        LastAddConstraintsTimings = new AddConstraintsTimings
+        {
+            SeedConstraintVertices = seedElapsed,
+            InterpolationTinBuild = interpolationTinBuildElapsed,
+            InterpolationTinVertexCount = interpolationTinVertexCount,
+            InterpolateAndInsertVertices = interpolateAndInsertElapsed,
+            ProcessConstraints = processConstraintsElapsed,
+            RestoreConformity = restoreConformityElapsed,
+            RestoreConformitySyntheticVertices = _nSyntheticVertices - syntheticBeforeRestore,
+            FloodFill = phaseTimer.Elapsed,
+            Total = totalTimer.Elapsed,
+        };
     }
 
     /// <summary>

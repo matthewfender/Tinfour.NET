@@ -15,6 +15,9 @@ public class Program
                 case "triangulation":
                     BenchmarkRunner.Run<IncrementalTinBenchmarks>();
                     break;
+                case "tin-scale":
+                    TinScaleHarness.Run(args.Skip(1).ToArray());
+                    break;
                 case "raster":
                 case "rasterizer":
                     BenchmarkRunner.Run<TinRasterizerBenchmarks>();
@@ -86,6 +89,7 @@ public class Program
         Console.WriteLine();
         Console.WriteLine("Benchmark types:");
         Console.WriteLine("  tin               - Run TIN construction benchmarks");
+        Console.WriteLine("  tin-scale [n ...] - One-shot RM-scale build timings (default 1000000; e.g. tin-scale 1000000 5000000)");
         Console.WriteLine("  interpolation     - Run triangular facet interpolation benchmarks");
         Console.WriteLine("  utilities         - Run TIN data extraction benchmarks");
         Console.WriteLine();
