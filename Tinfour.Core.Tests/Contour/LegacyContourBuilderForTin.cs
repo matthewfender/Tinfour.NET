@@ -23,28 +23,29 @@
  * 07/2019  G. Lucas     Created
  * 08/2025  M.Fender     Ported to C# for Tinfour.Core
  * 11/2025  M. Fender    Added Span<T> optimizations for performance
- * 07/2026  M. Fender    Single bracketing sweep replaces per-level TIN re-scan (827)
+ * 07/2026  M. Fender    Frozen as the pre-827 reference oracle (see below)
  *
  * Notes:
  *
  * -----------------------------------------------------------------------
  */
 
-namespace Tinfour.Core.Contour;
+namespace Tinfour.Core.Tests.Contour;
 
 using System.Collections;
 using System.Diagnostics;
 
 using Tinfour.Core.Common;
+using Tinfour.Core.Contour;
 using Tinfour.Core.Interpolation;
 
 /// <summary>
-///     Provides data elements and methods for constructing contours from a Delaunay
-///     Triangulation. It is assumed that the data represented by the triangulation
-///     can be treated as a continuous surface with no null values. Constrained
-///     Delaunay Triangulations are allowed.
+///     Frozen copy of <see cref="ContourBuilderForTin"/> as it stood before ticket 827
+///     replaced the per-level full-TIN sweep with a single bracketing sweep. Used as the
+///     equivalence oracle: the production builder must produce identical contours and
+///     regions to this reference implementation. Do not modify the algorithm here.
 /// </summary>
-public class ContourBuilderForTin
+public class LegacyContourBuilderForTin
 {
     /// <summary>
     ///     A list of "closed contours" which lie entirely in the interior of the TIN
@@ -154,7 +155,7 @@ public class ContourBuilderForTin
     ///     When true, contours are only generated within constraint regions.
     ///     When false (default), contours are generated for the entire TIN.
     /// </param>
-    public ContourBuilderForTin(
+    public LegacyContourBuilderForTin(
         IIncrementalTin tin,
         IVertexValuator? vertexValuator,
         double[] zContour,
@@ -329,78 +330,15 @@ public class ContourBuilderForTin
     {
         var stopwatch = Stopwatch.StartNew();
 
-        // Phase 1: a single streaming sweep over the edge pool brackets every edge
-        // against the full (ascending) contour-level array. On large TINs the previous
-        // per-level re-scan dominated contouring cost: L levels meant L full-edge-list
-        // materialisations (GetEdges) and L x 2 valuator calls per edge. Each edge is
-        // now valuated exactly once regardless of the number of levels.
-        var candidates = BuildLevelCandidates();
-
-        // Phase 2: per level, seed contours from the perimeter and from that level's
-        // candidate edges. Candidates are collected in edge-pool page order - the same
-        // order the per-level sweep used - so the output is identical to the old scan.
         for (var i = 0; i < _zContour.Length; i++)
         {
             _visited!.SetAll(false); // Clear all bits
             BuildOpenContours(i);
-            BuildClosedLoopContours(i, candidates[i]);
+            BuildClosedLoopContours(i);
         }
 
         stopwatch.Stop();
         _timeToBuildContours = stopwatch.ElapsedTicks * 100; // Convert to nanoseconds
-    }
-
-    /// <summary>
-    ///     Sweeps the edge pool once, collecting for each contour level the edges that can
-    ///     seed a closed-loop contour at that level: edges whose endpoint values strictly
-    ///     bracket the level (the (zA-z)*(zB-z) &lt; 0 test) and edges with both endpoints
-    ///     exactly on the level. Edges with a NaN endpoint value (ghost edges, unresolved
-    ///     values) never match, mirroring the NaN-propagating product test they replace.
-    /// </summary>
-    /// <returns>One candidate list per contour level, in edge-pool order.</returns>
-    private List<IQuadEdge>[] BuildLevelCandidates()
-    {
-        var candidates = new List<IQuadEdge>[_zContour.Length];
-        for (var i = 0; i < candidates.Length; i++) candidates[i] = new List<IQuadEdge>();
-
-        foreach (var e in _tin!.GetEdgeIterator())
-        {
-            var zA = _valuator!.Value(e.GetA());
-            var zB = _valuator.Value(e.GetB());
-
-            if (double.IsNaN(zA) || double.IsNaN(zB)) continue;
-
-            if (zA == zB)
-            {
-                // A level edge can only seed the on-level contour case, and only when a
-                // contour level exactly equals the shared endpoint value.
-                var iLevel = Array.BinarySearch(_zContour, zA);
-                if (iLevel >= 0) candidates[iLevel].Add(e);
-                continue;
-            }
-
-            double zLo, zHi;
-            if (zA < zB)
-            {
-                zLo = zA;
-                zHi = zB;
-            }
-            else
-            {
-                zLo = zB;
-                zHi = zA;
-            }
-
-            // Strict crossings: every level z with zLo < z < zHi. Levels equal to an
-            // endpoint are excluded, exactly as in the product test. _zContour is
-            // validated strictly ascending, so BinarySearch indices are unambiguous.
-            var j = Array.BinarySearch(_zContour, zLo);
-            j = j >= 0 ? j + 1 : ~j;
-            for (; j < _zContour.Length && _zContour[j] < zHi; j++)
-                candidates[j].Add(e);
-        }
-
-        return candidates;
     }
 
     /// <summary>
@@ -431,16 +369,13 @@ public class ContourBuilderForTin
 
     /// <summary>
     ///     Build contours that lie entirely inside the TIN and do not intersect
-    ///     the perimeter edges. These contours form closed loops. Only the level's
-    ///     pre-bracketed candidate edges are examined; edges already consumed by an
-    ///     earlier contour at this level (via the visited bitmap) are skipped, exactly
-    ///     as in the full-TIN sweep this replaces.
+    ///     the perimeter edges. These contours form closed loops.
     /// </summary>
-    private void BuildClosedLoopContours(int iContour, List<IQuadEdge> candidates)
+    private void BuildClosedLoopContours(int iContour)
     {
         var z = _zContour[iContour];
 
-        foreach (var p in candidates)
+        foreach (var p in _tin!.GetEdges())
         {
             var e = p;
             var eIndex = e.GetIndex();

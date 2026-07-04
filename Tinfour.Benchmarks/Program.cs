@@ -18,6 +18,9 @@ public class Program
                 case "tin-scale":
                     TinScaleHarness.Run(args.Skip(1).ToArray());
                     break;
+                case "contour-scale":
+                    ContourScaleHarness.Run(args.Skip(1).ToArray());
+                    break;
                 case "raster":
                 case "rasterizer":
                     BenchmarkRunner.Run<TinRasterizerBenchmarks>();
@@ -90,6 +93,7 @@ public class Program
         Console.WriteLine("Benchmark types:");
         Console.WriteLine("  tin               - Run TIN construction benchmarks");
         Console.WriteLine("  tin-scale [n ...] - One-shot RM-scale build timings (default 1000000; e.g. tin-scale 1000000 5000000)");
+        Console.WriteLine("  contour-scale [n ...] - One-shot RM-scale contour extraction timings, 36 levels (e.g. contour-scale 1000000 5000000)");
         Console.WriteLine("  interpolation     - Run triangular facet interpolation benchmarks");
         Console.WriteLine("  utilities         - Run TIN data extraction benchmarks");
         Console.WriteLine();
