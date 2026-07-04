@@ -123,6 +123,22 @@ public class SmoothingFilterEquivalenceTests
         Assert.Throws<ArgumentOutOfRangeException>(() => new SmoothingFilter(tin, 0));
     }
 
+    [Fact]
+    public void EmptyTin_MatchesLegacyBehaviour()
+    {
+        // An empty (non-bootstrapped) TIN must construct without throwing, exactly like
+        // the sequential implementation (guards the Partitioner empty-range edge case).
+        var tin = new IncrementalTin();
+
+        var legacy = new LegacySmoothingFilter(tin, 6);
+        var current = new SmoothingFilter(tin, 6);
+
+        Assert.Equal(legacy.VertexCount, current.VertexCount);
+        Assert.Equal(0, current.VertexCount);
+        Assert.Equal(legacy.MinZ, current.MinZ);
+        Assert.Equal(legacy.MaxZ, current.MaxZ);
+    }
+
     private static SmoothingFilter AssertEquivalent(IIncrementalTin tin, int passes)
     {
         var legacy = new LegacySmoothingFilter(tin, passes);

@@ -268,17 +268,22 @@ internal class SmoothingFilterInitializer
             }
         }
 
+        // Partitioner.Create requires a non-empty range; an empty TIN short-circuits every
+        // parallel phase below (all loops no-op, matching the sequential implementation).
         var nVertex = vertices.Count;
         var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount };
         var zArray = new double[nVertex];
-        Parallel.ForEach(
-            Partitioner.Create(0, nVertex),
-            parallelOptions,
-            range =>
-            {
-                for (var i = range.Item1; i < range.Item2; i++)
-                    zArray[i] = vertices[i].GetZ();
-            });
+        if (nVertex > 0)
+        {
+            Parallel.ForEach(
+                Partitioner.Create(0, nVertex),
+                parallelOptions,
+                range =>
+                {
+                    for (var i = range.Item1; i < range.Item2; i++)
+                        zArray[i] = vertices[i].GetZ();
+                });
+        }
 
         var vertexCollection = sw.Elapsed;
         sw.Restart();
@@ -292,21 +297,24 @@ internal class SmoothingFilterInitializer
         var neighborWeights = new float[nVertex][];
         var smoothedCount = 0;
 
-        Parallel.ForEach(
-            Partitioner.Create(0, nVertex),
-            parallelOptions,
-            () => new NeighborScratch(),
-            (range, _, scratch) =>
-            {
-                for (var i = range.Item1; i < range.Item2; i++)
+        if (nVertex > 0)
+        {
+            Parallel.ForEach(
+                Partitioner.Create(0, nVertex),
+                parallelOptions,
+                () => new NeighborScratch(),
+                (range, _, scratch) =>
                 {
-                    if (BuildNeighbors(i, vertices[i], claimEdges[i], vertexToIndex, neighborIndices, neighborWeights, scratch))
-                        scratch.BuiltCount++;
-                }
+                    for (var i = range.Item1; i < range.Item2; i++)
+                    {
+                        if (BuildNeighbors(i, vertices[i], claimEdges[i], vertexToIndex, neighborIndices, neighborWeights, scratch))
+                            scratch.BuiltCount++;
+                    }
 
-                return scratch;
-            },
-            scratch => Interlocked.Add(ref smoothedCount, scratch.BuiltCount));
+                    return scratch;
+                },
+                scratch => Interlocked.Add(ref smoothedCount, scratch.BuiltCount));
+        }
 
         var neighborBuild = sw.Elapsed;
 
@@ -318,7 +326,7 @@ internal class SmoothingFilterInitializer
         var passTimes = new TimeSpan[nPasses];
         var zRead = zArray;
         var zWrite = new double[nVertex];
-        for (var pass = 0; pass < nPasses; pass++)
+        for (var pass = 0; pass < nPasses && nVertex > 0; pass++)
         {
             sw.Restart();
             var read = zRead;
