@@ -24,6 +24,9 @@ public class Program
                 case "raster-scale":
                     RasterScaleHarness.Run(args.Skip(1).ToArray());
                     break;
+                case "smoothing-scale":
+                    SmoothingScaleHarness.Run(args.Skip(1).ToArray());
+                    break;
                 case "raster":
                 case "rasterizer":
                     BenchmarkRunner.Run<TinRasterizerBenchmarks>();
@@ -98,6 +101,7 @@ public class Program
         Console.WriteLine("  tin-scale [n ...] - One-shot RM-scale build timings (default 1000000; e.g. tin-scale 1000000 5000000)");
         Console.WriteLine("  contour-scale [n ...] - One-shot RM-scale contour extraction timings, 36 levels (e.g. contour-scale 1000000 5000000)");
         Console.WriteLine("  raster-scale [n ...]  - One-shot RM-scale raster fill timings incl. imbalanced padded-bounds case (e.g. raster-scale 5000000)");
+        Console.WriteLine("  smoothing-scale [n ...] - One-shot RM-scale SmoothingFilter construction timings, 6 passes (e.g. smoothing-scale 1000000 5000000)");
         Console.WriteLine("  interpolation     - Run triangular facet interpolation benchmarks");
         Console.WriteLine("  utilities         - Run TIN data extraction benchmarks");
         Console.WriteLine();

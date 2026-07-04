@@ -43,6 +43,7 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 using Tinfour.Core.Common;
+using Tinfour.Core.Diagnostics;
 using Tinfour.Core.Interpolation;
 
 /// <summary>
@@ -109,6 +110,7 @@ public class SmoothingFilter : IVertexValuator
 
         var initializer = new SmoothingFilterInitializer(tin, nPasses);
         _smoothedValues = initializer.SmoothedValues;
+        Timings = initializer.Timings;
 
         // Compute min/max Z values
         var z0 = double.PositiveInfinity;
@@ -130,6 +132,12 @@ public class SmoothingFilter : IVertexValuator
     ///     Intended for diagnostic and development purposes.
     /// </summary>
     public double TimeToConstructFilterMs => _timeToConstructFilterMs;
+
+    /// <summary>
+    ///     Gets per-phase wall-clock timings for the filter construction.
+    ///     Intended for diagnostic and development purposes.
+    /// </summary>
+    public SmoothingFilterTimings Timings { get; }
 
     /// <summary>
     ///     Gets the minimum value from the set of possible values. Due to the
@@ -180,8 +188,13 @@ internal class SmoothingFilterInitializer
     /// </summary>
     public Dictionary<IVertex, double> SmoothedValues { get; }
 
+    public SmoothingFilterTimings Timings { get; }
+
     public SmoothingFilterInitializer(IIncrementalTin tin, int nPasses)
     {
+        var swTotal = Stopwatch.StartNew();
+        var sw = Stopwatch.StartNew();
+
         // Build vertex list and mappings
         var vertices = tin.GetVertices().ToList();
         var nVertex = vertices.Count;
@@ -203,6 +216,9 @@ internal class SmoothingFilterInitializer
             zArray[i] = vertices[i].GetZ();
         }
 
+        var vertexCollection = sw.Elapsed;
+        sw.Restart();
+
         // Build neighbor weights for each vertex
         // neighborIndices[vertexIndex] = array of neighbor vertex indices
         // neighborWeights[vertexIndex] = array of corresponding weights
@@ -217,11 +233,18 @@ internal class SmoothingFilterInitializer
             InitForEdge(visited, e.GetDual(), vertexToIndex, neighborIndices, neighborWeights);
         }
 
+        var neighborBuild = sw.Elapsed;
+
         // Perform smoothing passes
+        var passTimes = new TimeSpan[nPasses];
         for (var pass = 0; pass < nPasses; pass++)
         {
+            sw.Restart();
             zArray = ProcessZ(zArray, neighborIndices, neighborWeights);
+            passTimes[pass] = sw.Elapsed;
         }
+
+        sw.Restart();
 
         // Build result dictionary
         SmoothedValues = new Dictionary<IVertex, double>(ReferenceEqualityComparer.Instance);
@@ -229,6 +252,23 @@ internal class SmoothingFilterInitializer
         {
             SmoothedValues[indexToVertex[i]] = zArray[i];
         }
+
+        var smoothedCount = 0;
+        for (var i = 0; i < nVertex; i++)
+        {
+            if (neighborIndices[i] != null) smoothedCount++;
+        }
+
+        Timings = new SmoothingFilterTimings
+        {
+            VertexCollection = vertexCollection,
+            NeighborBuild = neighborBuild,
+            Passes = passTimes,
+            ResultMap = sw.Elapsed,
+            Total = swTotal.Elapsed,
+            VertexCount = nVertex,
+            SmoothedVertexCount = smoothedCount,
+        };
     }
 
     private List<Vertex>? GetConnectedPolygon(IQuadEdge e)
