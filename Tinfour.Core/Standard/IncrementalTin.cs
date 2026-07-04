@@ -513,14 +513,15 @@ public class IncrementalTin : IIncrementalTin
         // Phase 4: Lock due to constraints and optionally restore conformity
         _lockedDueToConstraints = true;
         var syntheticBeforeRestore = _nSyntheticVertices;
+        var restoreConformityElapsed = TimeSpan.Zero;
         if (restoreConformity)
         {
             foreach (var e in GetEdgeIterator()) RestoreConformity((QuadEdge)e);
 
             _isConformant = true;
+            restoreConformityElapsed = phaseTimer.Elapsed;
         }
 
-        var restoreConformityElapsed = phaseTimer.Elapsed;
         phaseTimer.Restart();
 
         // Phase 5: Flood fill polygon interiors and set a linking edge
