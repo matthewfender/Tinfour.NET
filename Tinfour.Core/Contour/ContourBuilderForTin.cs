@@ -36,7 +36,9 @@ using System.Collections;
 using System.Diagnostics;
 
 using Tinfour.Core.Common;
+using Tinfour.Core.Edge;
 using Tinfour.Core.Interpolation;
+using Tinfour.Core.Standard;
 
 /// <summary>
 ///     Provides data elements and methods for constructing contours from a Delaunay
@@ -367,10 +369,27 @@ public class ContourBuilderForTin
         var candidates = new List<IQuadEdge>[_zContour.Length];
         for (var i = 0; i < candidates.Length; i++) candidates[i] = new List<IQuadEdge>();
 
-        foreach (var e in _tin!.GetEdgeIterator())
+        // Handle-native sweep in ascending slot order (the same order as
+        // GetEdgeIterator); vertex objects are touched only for valuation and
+        // edge wrappers are materialized only for actual candidates. Ghost
+        // sides valuate to NaN and self-skip.
+        var store = (_tin as IncrementalTin)?.GetEdgePoolInternal().Store;
+        if (store == null)
         {
-            var zA = _valuator!.Value(e.GetA());
-            var zB = _valuator.Value(e.GetB());
+            // Custom IIncrementalTin implementation: no store access. An empty
+            // TIN also lands here harmlessly (no edges, no candidates).
+            var firstEdge = (QuadEdge?)_tin!.GetEdgeIterator().FirstOrDefault();
+            if (firstEdge == null) return candidates;
+            store = firstEdge.GetStore();
+        }
+
+        for (var pair = 0; pair < store.PairHighWater; pair++)
+        {
+            var h = pair << 1;
+            if (!store.IsAllocated(h)) continue;
+
+            var zA = _valuator!.Value(store.VertexA(h));
+            var zB = _valuator.Value(store.VertexA(h ^ 1));
 
             if (double.IsNaN(zA) || double.IsNaN(zB)) continue;
 
@@ -379,7 +398,7 @@ public class ContourBuilderForTin
                 // A level edge can only seed the on-level contour case, and only when a
                 // contour level exactly equals the shared endpoint value.
                 var iLevel = Array.BinarySearch(_zContour, zA);
-                if (iLevel >= 0) candidates[iLevel].Add(e);
+                if (iLevel >= 0) candidates[iLevel].Add(store.Wrap(h));
                 continue;
             }
 
@@ -400,8 +419,12 @@ public class ContourBuilderForTin
             // validated strictly ascending, so BinarySearch indices are unambiguous.
             var j = Array.BinarySearch(_zContour, zLo);
             j = j >= 0 ? j + 1 : ~j;
-            for (; j < _zContour.Length && _zContour[j] < zHi; j++)
-                candidates[j].Add(e);
+            if (j < _zContour.Length && _zContour[j] < zHi)
+            {
+                var wrapped = store.Wrap(h);
+                for (; j < _zContour.Length && _zContour[j] < zHi; j++)
+                    candidates[j].Add(wrapped);
+            }
         }
 
         return candidates;
