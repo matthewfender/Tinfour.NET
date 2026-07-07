@@ -23,15 +23,15 @@
  * 07/2015  G. Lucas    Created
  * 12/2016  G. Lucas    Introduced support for constraints
  * 11/2017  G. Lucas    Added support for constraint regions
+ * 07/2026  M. Fender   Converted to a flyweight over EdgeStore (#832)
  * -----------------------------------------------------------------------
- *Notes:
- * The layout of this class is intended to accomplish the following:
- *  a) conserve memory in applications with a very large number of edges
- *  b) support the use of an edge pool by providing an application ID field.
- *
- * The original implementation prioritized memory efficiency, carefully
- * considering JVM object layout. In the C# port, we maintain a similar
- * structure while adapting to C# conventions and memory layout.
+ * Notes:
+ * QuadEdge is a flyweight: all edge state (links, vertices, constraint
+ * bits) lives in the owning EdgeStore's parallel arrays, addressed by this
+ * instance's directed handle. Instances are canonical per handle (obtained
+ * via EdgeStore.Wrap), so reference comparison of edges obtained from the
+ * same TIN remains valid. The handle IS the public edge index: base edges
+ * have even handles, their duals (QuadEdgePartner) odd handles.
  */
 
 namespace Tinfour.Core.Edge;
@@ -56,70 +56,55 @@ using Tinfour.Core.Common;
 public class QuadEdge : IQuadEdge
 {
     /// <summary>
-    ///     The dual of this edge (always valid after construction, never null in practice).
+    ///     The store holding this edge's state.
     /// </summary>
-    /// <remarks>
-    ///     Initialized to null! because the protected constructor is used by QuadEdgePartner
-    ///     which sets _dual from its parent's constructor.
-    /// </remarks>
-    protected internal QuadEdge _dual = null!;
+    private protected readonly EdgeStore Store;
 
     /// <summary>
-    ///     The forward link of this edge.
+    ///     The directed handle of this edge within the store.
     /// </summary>
-    protected internal QuadEdge? _f;
+    private protected readonly int Handle;
 
-    /// <summary>
-    ///     An arbitrary index value. For IncrementalTin, the index
-    ///     is used to manage the edge pool.
-    /// </summary>
-    protected internal int _index;
-
-    /// <summary>
-    ///     The reverse link of this edge.
-    /// </summary>
-    protected internal QuadEdge? _r;
-
-    /// <summary>
-    ///     The initial IVertex of this edge, the second IVertex of
-    ///     the dual. Can be null for ghost edges.
-    /// </summary>
-    protected internal IVertex _v = Vertex.Null;
-
-    /// <summary>
-    ///     Construct the edge and its dual assigning the pair the specified index.
-    /// </summary>
-    /// <param name="index">An arbitrary integer value.</param>
-    public QuadEdge(int index)
+    internal QuadEdge(EdgeStore store, int handle)
     {
-        _index = index;
-        _dual = new QuadEdgePartner(this);
+        Store = store;
+        Handle = handle;
     }
 
     /// <summary>
-    ///     Constructs the edge and its dual.
+    ///     Gets the directed handle of this edge (identical to its index).
     /// </summary>
-    /// <remarks>
-    ///     This constructor is only called by QuadEdgePartner, which sets _dual from its parent.
-    /// </remarks>
-#pragma warning disable CS8618 // _dual is set by QuadEdgePartner constructor
-    protected QuadEdge()
+    internal int GetHandle()
     {
+        return Handle;
     }
-#pragma warning restore CS8618
 
     /// <summary>
-    ///     Clears the edge, resetting it to an uninitialized state.
+    ///     Gets the store that owns this edge.
     /// </summary>
-    public virtual void Clear()
+    internal EdgeStore GetStore()
     {
-        _v = Vertex.Null;
-        _f = null;
-        _r = null;
-        _dual._v = Vertex.Null;
-        _dual._f = null;
-        _dual._r = null;
-        _dual._index = 0;
+        return Store;
+    }
+
+    /// <summary>
+    ///     Gets a token identifying this edge pair's current incarnation:
+    ///     the base index combined with the pair's recycling generation.
+    ///     Use this (not the bare index) to key bookkeeping that must survive
+    ///     TIN mutations — a deallocated pair reuses its handle and canonical
+    ///     wrappers, but never its token.
+    /// </summary>
+    internal long GetPairToken()
+    {
+        return ((long)Store.GenerationOf(Handle) << 32) | (uint)(Handle & ~1);
+    }
+
+    /// <summary>
+    ///     Clears the edge pair, resetting it to an uninitialized state.
+    /// </summary>
+    public void Clear()
+    {
+        Store.ClearPairState(Handle >> 1);
     }
 
     /// <summary>
@@ -129,7 +114,7 @@ public class QuadEdge : IQuadEdge
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IVertex GetA()
     {
-        return _v;
+        return Store.VertexA(Handle);
     }
 
     /// <summary>
@@ -139,7 +124,7 @@ public class QuadEdge : IQuadEdge
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IVertex GetB()
     {
-        return _dual._v;
+        return Store.VertexB(Handle);
     }
 
     /// <summary>
@@ -147,9 +132,9 @@ public class QuadEdge : IQuadEdge
     /// </summary>
     /// <returns>A positive, even value.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public virtual int GetBaseIndex()
+    public int GetBaseIndex()
     {
-        return _index;
+        return Handle & ~1;
     }
 
     /// <summary>
@@ -157,57 +142,66 @@ public class QuadEdge : IQuadEdge
     /// </summary>
     /// <returns>A reference to the side-zero edge of the pair.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public virtual IQuadEdge GetBaseReference()
+    public IQuadEdge GetBaseReference()
     {
-        return this;
+        return Store.Wrap(Handle & ~1);
     }
 
     /// <summary>
     ///     Gets the index of the region-based constraint associated with an edge
     ///     that serves as part of the polygon bounding that region.
-    ///     Delegates to the dual partner which stores constraint information.
     /// </summary>
     /// <returns>A positive integer or -1 if no constraint is specified.</returns>
-    public virtual int GetConstraintBorderIndex()
+    public int GetConstraintBorderIndex()
     {
-        return _dual.GetConstraintBorderIndex();
-    }
+        var bits = Store.ConstraintBits(Handle);
+        if ((bits & QuadEdgeConstants.ConstraintRegionBorderFlag) == 0) return -1;
 
-    // ---------- Constraint support (flags/indices) ----------
-    // IMPORTANT: In the Java implementation, all constraint information is stored
-    // in the QuadEdgePartner (dual), and the base QuadEdge delegates to its dual.
-    // This preserves the base edge's geometric index while allowing the dual to
-    // store constraint flags and indices.
+        // Border index is stored in lower bits (same as interior, they're mutually exclusive)
+        return QuadEdgeConstants.ExtractLowerIndex(bits);
+    }
 
     /// <summary>
     ///     Gets the index of the constraint associated with this edge.
-    ///     Delegates to the dual partner which stores constraint information.
     /// </summary>
     /// <returns>A positive value; may be zero if not specified.</returns>
-    public virtual int GetConstraintIndex()
+    public int GetConstraintIndex()
     {
-        return _dual.GetConstraintIndex();
+        var bits = Store.ConstraintBits(Handle);
+        if (bits < 0)
+        {
+            var c = QuadEdgeConstants.ExtractLowerIndex(bits);
+            if (c >= 0) return c;
+        }
+
+        return 0;
     }
 
     /// <summary>
     ///     Gets the index of a line-based constraint associated with an edge.
-    ///     Delegates to the dual partner which stores constraint information.
     /// </summary>
     /// <returns>A positive integer or -1 is no constraint index is available.</returns>
-    public virtual int GetConstraintLineIndex()
+    public int GetConstraintLineIndex()
     {
-        return _dual.GetConstraintLineIndex();
+        var bits = Store.ConstraintBits(Handle);
+        if ((bits & QuadEdgeConstants.ConstraintLineMemberFlag) != 0)
+            return QuadEdgeConstants.ExtractUpperIndex(bits);
+
+        return -1;
     }
 
     /// <summary>
     ///     Gets the index of the region-based constraint associated with an
     ///     edge contained in the interior of a constraint polygon.
-    ///     Delegates to the dual partner which stores constraint information.
     /// </summary>
     /// <returns>A positive integer or -1 if no constraint is specified.</returns>
-    public virtual int GetConstraintRegionInteriorIndex()
+    public int GetConstraintRegionInteriorIndex()
     {
-        return _dual.GetConstraintRegionInteriorIndex();
+        var bits = Store.ConstraintBits(Handle);
+        if ((bits & QuadEdgeConstants.ConstraintRegionInteriorFlag) != 0)
+            return QuadEdgeConstants.ExtractLowerIndex(bits);
+
+        return -1;
     }
 
     /// <summary>
@@ -217,7 +211,7 @@ public class QuadEdge : IQuadEdge
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IQuadEdge GetDual()
     {
-        return _dual;
+        return Store.Wrap(Handle ^ 1);
     }
 
     /// <summary>
@@ -227,7 +221,8 @@ public class QuadEdge : IQuadEdge
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IQuadEdge? GetDualFromReverse()
     {
-        return _r?._dual;
+        var r = Store.Reverse(Handle);
+        return r < 0 ? null : Store.Wrap(r ^ 1);
     }
 
     /// <summary>
@@ -237,7 +232,7 @@ public class QuadEdge : IQuadEdge
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IQuadEdge GetForward()
     {
-        return _f!;
+        return Store.Wrap(Store.Forward(Handle));
     }
 
     /// <summary>
@@ -247,17 +242,19 @@ public class QuadEdge : IQuadEdge
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IQuadEdge GetForwardFromDual()
     {
-        return _dual._f!;
+        return Store.Wrap(Store.Forward(Handle ^ 1));
     }
 
     /// <summary>
-    ///     Gets the index value for this edge.
+    ///     Gets the index value for this edge. The index of an edge is
+    ///     intrinsic: it is the directed handle of the edge within its store
+    ///     (even for the base side, odd for the dual).
     /// </summary>
     /// <returns>A positive integer value</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public virtual int GetIndex()
+    public int GetIndex()
     {
-        return _index;
+        return Handle;
     }
 
     /// <summary>
@@ -266,7 +263,7 @@ public class QuadEdge : IQuadEdge
     /// <returns>A positive floating point value</returns>
     public double GetLength()
     {
-        var a = _v;
+        var a = GetA();
         var b = GetB();
         if (a.IsNullVertex() || b.IsNullVertex()) return double.PositiveInfinity;
         return a.GetDistance(b);
@@ -281,7 +278,7 @@ public class QuadEdge : IQuadEdge
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public double GetLengthSquared()
     {
-        var a = _v;
+        var a = GetA();
         var b = GetB();
         if (a.IsNullVertex() || b.IsNullVertex()) return double.PositiveInfinity;
         return a.GetDistanceSq(b.X, b.Y);
@@ -303,7 +300,7 @@ public class QuadEdge : IQuadEdge
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IQuadEdge GetReverse()
     {
-        return _r!;
+        return Store.Wrap(Store.Reverse(Handle));
     }
 
     /// <summary>
@@ -313,7 +310,7 @@ public class QuadEdge : IQuadEdge
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IQuadEdge GetReverseFromDual()
     {
-        return _dual._r!;
+        return Store.Wrap(Store.Reverse(Handle ^ 1));
     }
 
     /// <summary>
@@ -322,147 +319,207 @@ public class QuadEdge : IQuadEdge
     /// </summary>
     /// <returns>A value of 0 or 1.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public virtual int GetSide()
+    public int GetSide()
     {
-        return 0;
+        return Handle & 1;
     }
 
     /// <summary>
     ///     Indicates whether an edge is constrained.
-    ///     Delegates to the dual partner which stores constraint information.
     /// </summary>
     /// <returns>True if the edge is constrained; otherwise, false.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public virtual bool IsConstrained()
+    public bool IsConstrained()
     {
-        return _dual.IsConstrained();
+        return Store.ConstraintBits(Handle) < 0;
     }
 
     /// <summary>
     ///     Indicates whether the edge is a member of a constraint line.
-    ///     Delegates to the dual partner which stores constraint information.
     /// </summary>
     /// <returns>True if the edge is a member of an region; otherwise false.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public virtual bool IsConstraintLineMember()
+    public bool IsConstraintLineMember()
     {
-        return _dual.IsConstraintLineMember();
+        return (Store.ConstraintBits(Handle) & QuadEdgeConstants.ConstraintLineMemberFlag) != 0;
     }
 
     /// <summary>
     ///     Indicates whether an edge represents the border of a constrained region.
-    ///     Delegates to the dual partner which stores constraint information.
     /// </summary>
     /// <returns>
     ///     True if the edge is the border of the constrained region;
     ///     otherwise, false.
     /// </returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public virtual bool IsConstraintRegionBorder()
+    public bool IsConstraintRegionBorder()
     {
-        return _dual.IsConstraintRegionBorder();
+        return (Store.ConstraintBits(Handle) & QuadEdgeConstants.ConstraintRegionBorderFlag) != 0;
     }
 
     /// <summary>
     ///     Indicates whether the edge is in the interior of a constrained region.
-    ///     Delegates to the dual partner which stores constraint information.
     /// </summary>
     /// <returns>True if the edge is in the interior of an region; otherwise false.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public virtual bool IsConstraintRegionInterior()
+    public bool IsConstraintRegionInterior()
     {
-        return _dual.IsConstraintRegionInterior();
+        return (Store.ConstraintBits(Handle) & QuadEdgeConstants.ConstraintRegionInteriorFlag) != 0;
     }
 
     /// <summary>
     ///     Indicates whether the edge is a member of a constrained region.
-    ///     Delegates to the dual partner which stores constraint information.
     /// </summary>
     /// <returns>True if the edge is a member of an region; otherwise false.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public virtual bool IsConstraintRegionMember()
+    public bool IsConstraintRegionMember()
     {
-        return _dual.IsConstraintRegionMember();
+        return (Store.ConstraintBits(Handle) & QuadEdgeConstants.ConstraintRegionMemberFlags) != 0;
     }
 
     /// <summary>
     ///     Indicates whether the synthetic flag is set for the edge.
-    ///     Delegates to the dual partner which stores constraint information.
     /// </summary>
     /// <returns>True if the edge is synthetic; otherwise, false.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public virtual bool IsSynthetic()
+    public bool IsSynthetic()
     {
-        return _dual.IsSynthetic();
+        return (Store.ConstraintBits(Handle) & QuadEdgeConstants.SyntheticEdgeFlag) != 0;
     }
 
     public void SetA(IVertex a)
     {
-        _v = a;
+        Store.SetVertexA(Handle, a);
     }
 
     /// <summary>
     ///     Sets a flag identifying the edge as the border of a region-based constraint
     ///     and stores the index for that constraint.
-    ///     Delegates to the dual partner which stores constraint information.
     /// </summary>
     /// <param name="constraintIndex">A positive integer in the range zero to 32766, or -1 for a null constraint.</param>
-    public virtual void SetConstraintBorderIndex(int constraintIndex)
+    public void SetConstraintBorderIndex(int constraintIndex)
     {
-        _dual.SetConstraintBorderIndex(constraintIndex);
+        // Border index is stored in lower bits (same as interior - they're mutually exclusive)
+        // This allows up to 32,766 polygon constraints
+        if (constraintIndex < -1 || constraintIndex > QuadEdgeConstants.ConstraintLowerIndexValueMax)
+            throw new ArgumentOutOfRangeException(
+                nameof(constraintIndex),
+                $"Border constraint index out of range [0..{QuadEdgeConstants.ConstraintLowerIndexValueMax}]");
+
+        // Preserve line constraint info in upper bits, clear lower bits and set border
+        var bits = Store.ConstraintBits(Handle);
+        bits = (bits & QuadEdgeConstants.ConstraintUpperIndexMask)
+               | QuadEdgeConstants.ConstraintEdgeFlag
+               | QuadEdgeConstants.ConstraintRegionBorderFlag
+               | QuadEdgeConstants.PackLowerIndex(constraintIndex);
+        Store.SetConstraintBits(Handle, bits);
     }
 
     /// <summary>
-    ///     Sets the constraint index for this edge.
-    ///     Delegates to the dual partner which stores constraint information.
+    ///     Sets the constraint index for this edge (stored in lower bits for region/polygon constraints).
     /// </summary>
     /// <param name="constraintIndex">
     ///     A positive number indicating which constraint
-    ///     a particular edge is associated with.
+    ///     a particular edge is associated with (0 to 32766).
     /// </param>
-    public virtual void SetConstraintIndex(int constraintIndex)
+    public void SetConstraintIndex(int constraintIndex)
     {
-        _dual.SetConstraintIndex(constraintIndex);
+        var bits = Store.ConstraintBits(Handle);
+        if (constraintIndex < 0)
+        {
+            bits &= ~QuadEdgeConstants.ConstraintLowerIndexMask;
+            bits |= QuadEdgeConstants.ConstraintEdgeFlag;
+            Store.SetConstraintBits(Handle, bits);
+            return;
+        }
+
+        if (constraintIndex > QuadEdgeConstants.ConstraintLowerIndexValueMax)
+            throw new ArgumentOutOfRangeException(
+                nameof(constraintIndex),
+                $"Constraint index out of range [0..{QuadEdgeConstants.ConstraintLowerIndexValueMax}]");
+
+        bits = (bits & ~QuadEdgeConstants.ConstraintLowerIndexMask)
+               | QuadEdgeConstants.PackLowerIndex(constraintIndex)
+               | QuadEdgeConstants.ConstraintEdgeFlag;
+        Store.SetConstraintBits(Handle, bits);
     }
 
     /// <summary>
     ///     Sets a flag identifying the edge as a member of a line-based constraint
     ///     and stores the index for that constraint.
-    ///     Delegates to the dual partner which stores constraint information.
     /// </summary>
     /// <param name="constraintIndex">A positive integer in range zero to 4094</param>
-    public virtual void SetConstraintLineIndex(int constraintIndex)
+    public void SetConstraintLineIndex(int constraintIndex)
     {
-        _dual.SetConstraintLineIndex(constraintIndex);
+        var bits = Store.ConstraintBits(Handle);
+        if (constraintIndex < 0)
+        {
+            bits &= ~QuadEdgeConstants.ConstraintUpperIndexMask;
+            bits &= ~QuadEdgeConstants.ConstraintLineMemberFlag;
+            Store.SetConstraintBits(Handle, bits);
+            return;
+        }
+
+        if (constraintIndex > QuadEdgeConstants.ConstraintUpperIndexValueMax)
+            throw new ArgumentOutOfRangeException(
+                nameof(constraintIndex),
+                $"Line constraint index out of range [0..{QuadEdgeConstants.ConstraintUpperIndexValueMax}]");
+
+        bits = (bits & ~QuadEdgeConstants.ConstraintUpperIndexMask)
+               | QuadEdgeConstants.PackUpperIndex(constraintIndex)
+               | QuadEdgeConstants.ConstraintLineMemberFlag
+               | QuadEdgeConstants.ConstraintEdgeFlag;
+        Store.SetConstraintBits(Handle, bits);
     }
 
     /// <summary>
     ///     Sets the constraint-line member flag for the edge to true.
-    ///     Delegates to the dual partner which stores constraint information.
     /// </summary>
-    public virtual void SetConstraintLineMemberFlag()
+    public void SetConstraintLineMemberFlag()
     {
-        _dual.SetConstraintLineMemberFlag();
+        Store.SetConstraintBits(Handle, Store.ConstraintBits(Handle) | QuadEdgeConstants.ConstraintLineMemberFlag);
     }
 
     /// <summary>
     ///     Sets a flag indicating that the edge is an edge of a constrained region.
-    ///     Delegates to the dual partner which stores constraint information.
     /// </summary>
-    public virtual void SetConstraintRegionBorderFlag()
+    public void SetConstraintRegionBorderFlag()
     {
-        _dual.SetConstraintRegionBorderFlag();
+        Store.SetConstraintBits(
+            Handle,
+            Store.ConstraintBits(Handle)
+            | QuadEdgeConstants.ConstraintRegionBorderFlag
+            | QuadEdgeConstants.ConstraintEdgeFlag);
     }
 
     /// <summary>
     ///     Sets a flag identifying the edge as an interior member of a region-based
     ///     constraint and stores the index for that constraint.
-    ///     Delegates to the dual partner which stores constraint information.
     /// </summary>
     /// <param name="constraintIndex">A positive integer in the range 0 to 32766, or -1 for a null value</param>
-    public virtual void SetConstraintRegionInteriorIndex(int constraintIndex)
+    public void SetConstraintRegionInteriorIndex(int constraintIndex)
     {
-        _dual.SetConstraintRegionInteriorIndex(constraintIndex);
+        var bits = Store.ConstraintBits(Handle);
+        if (constraintIndex < 0)
+        {
+            bits &= ~QuadEdgeConstants.ConstraintLowerIndexMask;
+            bits &= ~QuadEdgeConstants.ConstraintRegionInteriorFlag;
+            Store.SetConstraintBits(Handle, bits);
+            return;
+        }
+
+        // Border edges take precedence - don't overwrite them with interior status
+        if (IsConstraintRegionBorder()) return;
+
+        if (constraintIndex > QuadEdgeConstants.ConstraintLowerIndexValueMax)
+            throw new ArgumentOutOfRangeException(
+                nameof(constraintIndex),
+                $"Constraint index out of range [0..{QuadEdgeConstants.ConstraintLowerIndexValueMax}]");
+
+        bits = (bits & ~QuadEdgeConstants.ConstraintLowerIndexMask)
+               | QuadEdgeConstants.PackLowerIndex(constraintIndex)
+               | QuadEdgeConstants.ConstraintRegionInteriorFlag;
+        Store.SetConstraintBits(Handle, bits);
     }
 
     /// <summary>
@@ -472,8 +529,7 @@ public class QuadEdge : IQuadEdge
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void SetForward(QuadEdge forward)
     {
-        _f = forward;
-        if (forward != null) forward._r = this;
+        Store.SetForward(Handle, forward?.Handle ?? EdgeStore.NullHandle);
     }
 
     /// <summary>
@@ -486,23 +542,13 @@ public class QuadEdge : IQuadEdge
     }
 
     /// <summary>
-    ///     Sets the index value for this edge.
-    /// </summary>
-    /// <param name="index">The index value to assign</param>
-    public virtual void SetIndex(int index)
-    {
-        _index = index;
-    }
-
-    /// <summary>
     ///     Sets the reverse reference for this edge and reciprocal forward reference
     /// </summary>
     /// <param name="reverse">A valid reference.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void SetReverse(QuadEdge reverse)
     {
-        _r = reverse;
-        if (reverse != null) reverse._f = this;
+        Store.SetReverse(Handle, reverse?.Handle ?? EdgeStore.NullHandle);
     }
 
     /// <summary>
@@ -516,12 +562,14 @@ public class QuadEdge : IQuadEdge
 
     /// <summary>
     ///     Sets the synthetic flag for the edge.
-    ///     Delegates to the dual partner which stores constraint information.
     /// </summary>
     /// <param name="status">True if the edge is synthetic; otherwise, false.</param>
-    public virtual void SetSynthetic(bool status)
+    public void SetSynthetic(bool status)
     {
-        _dual.SetSynthetic(status);
+        var bits = Store.ConstraintBits(Handle);
+        if (status) bits |= QuadEdgeConstants.SyntheticEdgeFlag;
+        else bits &= ~QuadEdgeConstants.SyntheticEdgeFlag;
+        Store.SetConstraintBits(Handle, bits);
     }
 
     /// <summary>
@@ -529,20 +577,25 @@ public class QuadEdge : IQuadEdge
     /// </summary>
     /// <param name="a">The initial IVertex, must be a valid reference.</param>
     /// <param name="b">The second IVertex, may be a valid reference or Vertex.Null for a ghost edge.</param>
-    public virtual void SetVertices(IVertex a, IVertex b)
+    public void SetVertices(IVertex a, IVertex b)
     {
-        _v = a;
-        _dual._v = b;
+        Store.SetVertices(Handle, a, b);
     }
 
     /// <summary>
     ///     Clears the constraint region flags (border and interior) from this edge.
     ///     This is used when an edge is flipped and its constraint status becomes stale.
-    ///     Delegates to the dual partner which stores constraint information.
+    ///     Preserves the ConstraintEdgeFlag (if edge is constrained) and ConstraintLineMemberFlag.
     /// </summary>
-    public virtual void ClearConstraintRegionFlags()
+    public void ClearConstraintRegionFlags()
     {
-        ((QuadEdgePartner)_dual).ClearConstraintRegionFlags();
+        // Clear both border and interior flags, but preserve other flags and constraint indices
+        // Note: We clear the lower index bits too since they store region constraint index
+        var bits = Store.ConstraintBits(Handle);
+        bits &= ~(QuadEdgeConstants.ConstraintRegionBorderFlag
+                  | QuadEdgeConstants.ConstraintRegionInteriorFlag
+                  | QuadEdgeConstants.ConstraintLowerIndexMask);
+        Store.SetConstraintBits(Handle, bits);
     }
 
     /// <summary>
@@ -551,16 +604,16 @@ public class QuadEdge : IQuadEdge
     /// <returns>A string with IVertex coordinates and edge index.</returns>
     public override string ToString()
     {
-        var a = _v;
+        var a = GetA();
         var b = GetB();
 
-        if (a.IsNullVertex() && b.IsNullVertex()) return $"Edge(null -> null) [{_index}]";
+        if (a.IsNullVertex() && b.IsNullVertex()) return $"Edge(null -> null) [{GetIndex()}]";
 
-        if (a.IsNullVertex()) return $"Edge(ghost -> {b.X:F1},{b.Y:F1}) [{_index}]";
+        if (a.IsNullVertex()) return $"Edge(ghost -> {b.X:F1},{b.Y:F1}) [{GetIndex()}]";
 
-        if (b.IsNullVertex()) return $"Edge({a.X:F1},{a.Y:F1} -> ghost) [{_index}]";
+        if (b.IsNullVertex()) return $"Edge({a.X:F1},{a.Y:F1} -> ghost) [{GetIndex()}]";
 
-        return $"Edge({a.X:F1},{a.Y:F1} -> {b.X:F1},{b.Y:F1}) [{_index}]";
+        return $"Edge({a.X:F1},{a.Y:F1} -> {b.X:F1},{b.Y:F1}) [{GetIndex()}]";
     }
 
     /// <summary>
@@ -571,7 +624,7 @@ public class QuadEdge : IQuadEdge
     /// <param name="endPoint">Output parameter to receive the ending point of the edge.</param>
     public void TranscribeTo(out Vector2 startPoint, out Vector2 endPoint)
     {
-        var a = _v;
+        var a = GetA();
         var b = GetB();
 
         startPoint = a.IsNullVertex() ? new Vector2(float.NaN, float.NaN) : new Vector2((float)a.X, (float)a.Y);
@@ -583,44 +636,44 @@ public class QuadEdge : IQuadEdge
     /// <summary>
     ///     Gets the forward link as a QuadEdge (for serialization).
     /// </summary>
-    internal QuadEdge? GetForwardInternal() => _f;
+    internal QuadEdge? GetForwardInternal() => Store.WrapOrNull(Store.Forward(Handle));
 
     /// <summary>
     ///     Gets the reverse link as a QuadEdge (for serialization).
     /// </summary>
-    internal QuadEdge? GetReverseInternal() => _r;
+    internal QuadEdge? GetReverseInternal() => Store.WrapOrNull(Store.Reverse(Handle));
 
     /// <summary>
     ///     Gets the dual/partner edge (for serialization).
     /// </summary>
-    internal QuadEdge GetDualInternal() => _dual;
+    internal QuadEdge GetDualInternal() => Store.Wrap(Handle ^ 1);
 
     /// <summary>
-    ///     Gets the packed constraint bits from the partner edge.
-    ///     This is the raw _index field of the QuadEdgePartner which stores constraint flags.
+    ///     Gets the packed constraint bits of the pair.
     /// </summary>
-    internal int GetPartnerConstraintBits() => _dual._index;
+    internal int GetPartnerConstraintBits() => Store.ConstraintBits(Handle);
 
     /// <summary>
     ///     Sets the forward link directly without setting the reciprocal (for deserialization).
     /// </summary>
-    internal void SetForwardDirect(QuadEdge? forward) => _f = forward;
+    internal void SetForwardDirect(QuadEdge? forward) =>
+        Store.SetForwardDirect(Handle, forward?.Handle ?? EdgeStore.NullHandle);
 
     /// <summary>
     ///     Sets the reverse link directly without setting the reciprocal (for deserialization).
     /// </summary>
-    internal void SetReverseDirect(QuadEdge? reverse) => _r = reverse;
+    internal void SetReverseDirect(QuadEdge? reverse) =>
+        Store.SetReverseDirect(Handle, reverse?.Handle ?? EdgeStore.NullHandle);
 
     /// <summary>
-    ///     Sets the packed constraint bits on the partner edge directly (for deserialization).
-    ///     This sets the raw _index field of the QuadEdgePartner.
+    ///     Sets the packed constraint bits of the pair directly (for deserialization).
     /// </summary>
-    internal void SetPartnerConstraintBits(int bits) => _dual._index = bits;
+    internal void SetPartnerConstraintBits(int bits) => Store.SetConstraintBits(Handle, bits);
 
     /// <summary>
-    ///     Sets the B vertex directly on the dual (for deserialization).
+    ///     Sets the B vertex directly (for deserialization).
     /// </summary>
-    internal void SetBDirect(IVertex b) => _dual._v = b;
+    internal void SetBDirect(IVertex b) => Store.SetVertexA(Handle ^ 1, b);
 
     #endregion
 }

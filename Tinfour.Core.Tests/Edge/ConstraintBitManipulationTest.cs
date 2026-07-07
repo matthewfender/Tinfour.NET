@@ -39,7 +39,8 @@ public class ConstraintBitManipulationTest
     public void SetAndGetConstraintBorderIndex_ShouldRoundTrip()
     {
         // Create a QuadEdge
-        var edge = new QuadEdge(0);
+        var pool = new EdgePool();
+        var edge = (QuadEdge)pool.AllocateUndefinedEdge();
         var partner = (QuadEdgePartner)edge.GetDual();
 
         // Test various constraint indices (border index now uses lower 15 bits, max 32766)

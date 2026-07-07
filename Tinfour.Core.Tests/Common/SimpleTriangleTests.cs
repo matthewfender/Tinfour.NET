@@ -31,9 +31,10 @@ public class SimpleTriangleTests
         var v2 = new Vertex(3, 0, 0);
         var v3 = new Vertex(0, 4, 0);
 
-        var e1 = new QuadEdge(10);
-        var e2 = new QuadEdge(20);
-        var e3 = new QuadEdge(30);
+        var pool = new EdgePool();
+        var e1 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e2 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e3 = (QuadEdge)pool.AllocateUndefinedEdge();
 
         e1.SetVertices(v1, v2);
         e2.SetVertices(v2, v3);
@@ -60,9 +61,10 @@ public class SimpleTriangleTests
         var v2 = new Vertex(3, 0, 0);
         var v3 = new Vertex(0, 4, 0);
 
-        var e1 = new QuadEdge(10);
-        var e2 = new QuadEdge(20);
-        var e3 = new QuadEdge(30);
+        var pool = new EdgePool();
+        var e1 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e2 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e3 = (QuadEdge)pool.AllocateUndefinedEdge();
 
         e1.SetVertices(v1, v2);
         e2.SetVertices(v2, v3);
@@ -75,7 +77,9 @@ public class SimpleTriangleTests
         Assert.Same(e1, triangle.GetEdgeA());
         Assert.Same(e2, triangle.GetEdgeB());
         Assert.Same(e3, triangle.GetEdgeC());
-        Assert.Equal(10, triangle.GetIndex()); // minimum of edge indices
+        // Pool-assigned indices are sequential by allocation order (#832), so
+        // the first-allocated edge (e1) carries the minimum index here.
+        Assert.Equal(e1.GetIndex(), triangle.GetIndex()); // minimum of edge indices
     }
 
     [Fact]
@@ -86,9 +90,10 @@ public class SimpleTriangleTests
         var v2 = new Vertex(0, 3, 0);
         var v3 = new Vertex(4, 0, 0);
 
-        var e1 = new QuadEdge(10);
-        var e2 = new QuadEdge(20);
-        var e3 = new QuadEdge(30);
+        var pool = new EdgePool();
+        var e1 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e2 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e3 = (QuadEdge)pool.AllocateUndefinedEdge();
 
         e1.SetVertices(v1, v2);
         e2.SetVertices(v2, v3);
@@ -111,9 +116,10 @@ public class SimpleTriangleTests
         var v2 = new Vertex(4, 0, 0);
         var v3 = new Vertex(0, 3, 0);
 
-        var e1 = new QuadEdge(10);
-        var e2 = new QuadEdge(20);
-        var e3 = new QuadEdge(30);
+        var pool = new EdgePool();
+        var e1 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e2 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e3 = (QuadEdge)pool.AllocateUndefinedEdge();
 
         e1.SetVertices(v1, v2);
         e2.SetVertices(v2, v3);
@@ -136,9 +142,10 @@ public class SimpleTriangleTests
         var v2 = new Vertex(6, 0, 20);
         var v3 = new Vertex(0, 9, 30);
 
-        var e1 = new QuadEdge(10);
-        var e2 = new QuadEdge(20);
-        var e3 = new QuadEdge(30);
+        var pool = new EdgePool();
+        var e1 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e2 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e3 = (QuadEdge)pool.AllocateUndefinedEdge();
 
         e1.SetVertices(v1, v2);
         e2.SetVertices(v2, v3);
@@ -164,9 +171,10 @@ public class SimpleTriangleTests
         var v2 = new Vertex(3, 0, 0);
         var v3 = new Vertex(0, 4, 0);
 
-        var e1 = new QuadEdge(10);
-        var e2 = new QuadEdge(20);
-        var e3 = new QuadEdge(30);
+        var pool = new EdgePool();
+        var e1 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e2 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e3 = (QuadEdge)pool.AllocateUndefinedEdge();
 
         e1.SetVertices(v1, v2);
         e2.SetVertices(v2, v3);
@@ -190,9 +198,10 @@ public class SimpleTriangleTests
         var v2 = new Vertex(3, 0, 0);
         var v3 = new Vertex(0, 4, 0);
 
-        var e1 = new QuadEdge(10);
-        var e2 = new QuadEdge(20);
-        var e3 = new QuadEdge(30);
+        var pool = new EdgePool();
+        var e1 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e2 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e3 = (QuadEdge)pool.AllocateUndefinedEdge();
 
         e1.SetVertices(v1, v2);
         e2.SetVertices(v2, v3);
@@ -218,9 +227,15 @@ public class SimpleTriangleTests
         var v2 = new Vertex(3, 0, 0);
         var v3 = new Vertex(0, 4, 0);
 
-        var e1 = new QuadEdge(50);
-        var e2 = new QuadEdge(20);
-        var e3 = new QuadEdge(30);
+        // Pool-assigned indices are sequential by allocation order (#832), so
+        // allocate e2 first to give it the minimum index despite being the
+        // second argument to SimpleTriangle - this preserves the "minimum is
+        // not necessarily the first edge" intent of the original test (which
+        // used literal indices 50, 20, 30).
+        var pool = new EdgePool();
+        var e2 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e3 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e1 = (QuadEdge)pool.AllocateUndefinedEdge();
 
         e1.SetVertices(v1, v2);
         e2.SetVertices(v2, v3);
@@ -229,7 +244,7 @@ public class SimpleTriangleTests
         var triangle = new SimpleTriangle(e1, e2, e3);
 
         // Act & Assert
-        Assert.Equal(20, triangle.GetIndex()); // minimum of 50, 20, 30
+        Assert.Equal(e2.GetIndex(), triangle.GetIndex()); // minimum index among e1, e2, e3
     }
 
     [Fact]
@@ -240,9 +255,10 @@ public class SimpleTriangleTests
         var v2 = new Vertex(3, 0, 0);
         var v3 = new Vertex(0, 4, 0);
 
-        var e1 = new QuadEdge(10);
-        var e2 = new QuadEdge(20);
-        var e3 = new QuadEdge(30);
+        var pool = new EdgePool();
+        var e1 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e2 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e3 = (QuadEdge)pool.AllocateUndefinedEdge();
 
         e1.SetVertices(v1, v2);
         e2.SetVertices(v2, v3);
@@ -266,9 +282,10 @@ public class SimpleTriangleTests
         var v2 = new Vertex(3, 0, 0);
         var v3 = new Vertex(0, 4, 0);
 
-        var e1 = new QuadEdge(10);
-        var e2 = new QuadEdge(20);
-        var e3 = new QuadEdge(30);
+        var pool = new EdgePool();
+        var e1 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e2 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e3 = (QuadEdge)pool.AllocateUndefinedEdge();
 
         e1.SetVertices(v1, v2);
         e2.SetVertices(v2, v3);
@@ -287,9 +304,10 @@ public class SimpleTriangleTests
         var v1 = new Vertex(0, 0, 0);
         var v2 = new Vertex(3, 0, 0);
 
-        var e1 = new QuadEdge(10);
-        var e2 = new QuadEdge(20);
-        var e3 = new QuadEdge(30);
+        var pool = new EdgePool();
+        var e1 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e2 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e3 = (QuadEdge)pool.AllocateUndefinedEdge();
 
         e1.SetVertices(v1, v2);
         e2.SetVertices(v2, Vertex._NullVertex); // ghost vertex
@@ -309,9 +327,10 @@ public class SimpleTriangleTests
         var v2 = new Vertex(3, 4, 0);
         var v3 = new Vertex(5, 6, 0);
 
-        var e1 = new QuadEdge(10);
-        var e2 = new QuadEdge(20);
-        var e3 = new QuadEdge(30);
+        var pool = new EdgePool();
+        var e1 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e2 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e3 = (QuadEdge)pool.AllocateUndefinedEdge();
 
         e1.SetVertices(v1, v2);
         e2.SetVertices(v2, v3);
@@ -324,7 +343,9 @@ public class SimpleTriangleTests
 
         // Assert
         Assert.Contains("Triangle", result);
-        Assert.Contains("10", result); // index
+        // Pool-assigned indices are no longer literal test values (#832); assert
+        // the triangle's actual (minimum) index is embedded in the "[n]" slot.
+        Assert.Contains($"[{triangle.GetIndex()}]", result); // index
         Assert.Contains("5.00", result); // vertex coordinates
         Assert.Contains("6.00", result);
     }
