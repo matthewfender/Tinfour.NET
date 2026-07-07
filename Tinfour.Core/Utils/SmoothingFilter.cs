@@ -46,7 +46,9 @@ using System.Diagnostics;
 
 using Tinfour.Core.Common;
 using Tinfour.Core.Diagnostics;
+using Tinfour.Core.Edge;
 using Tinfour.Core.Interpolation;
+using Tinfour.Core.Standard;
 
 /// <summary>
 ///     An implementation of the vertex valuator that processes the vertices in a
@@ -234,23 +236,38 @@ internal class SmoothingFilterInitializer
         var estimatedVertices = Math.Max(16, tin.GetMaximumEdgeAllocationIndex() / 6);
         var vertexToIndex = new Dictionary<IVertex, int>(estimatedVertices, ReferenceEqualityComparer.Instance);
         var vertices = new List<IVertex>(estimatedVertices);
-        var claimEdges = new List<IQuadEdge?>(estimatedVertices);
+        var claimEdges = new List<int>(estimatedVertices);
 
-        foreach (var e in tin.GetEdgeIterator())
+        // Handle-native sweep over allocated pairs in ascending slot order —
+        // the same enumeration order as GetEdgeIterator(), reading the store's
+        // arrays directly.
+        var store = (tin as IncrementalTin)?.GetEdgePoolInternal().Store;
+        if (store != null)
         {
-            var a = e.GetA();
-            if (a != null && !a.IsNullVertex() && vertexToIndex.TryAdd(a, vertices.Count))
+            for (var pair = 0; pair < store.PairHighWater; pair++)
             {
-                vertices.Add(a);
-                claimEdges.Add(e);
-            }
+                var h = pair << 1;
+                if (!store.IsAllocated(h)) continue;
 
-            var dual = e.GetDual();
-            var b = dual.GetA();
-            if (b != null && !b.IsNullVertex() && vertexToIndex.TryAdd(b, vertices.Count))
-            {
-                vertices.Add(b);
-                claimEdges.Add(dual);
+                if (!store.IsNullA(h))
+                {
+                    var a = store.VertexA(h);
+                    if (vertexToIndex.TryAdd(a, vertices.Count))
+                    {
+                        vertices.Add(a);
+                        claimEdges.Add(h);
+                    }
+                }
+
+                if (!store.IsNullA(h | 1))
+                {
+                    var b = store.VertexA(h | 1);
+                    if (vertexToIndex.TryAdd(b, vertices.Count))
+                    {
+                        vertices.Add(b);
+                        claimEdges.Add(h | 1);
+                    }
+                }
             }
         }
 
@@ -263,7 +280,7 @@ internal class SmoothingFilterInitializer
                 if (vertexToIndex.TryAdd(v, vertices.Count))
                 {
                     vertices.Add(v);
-                    claimEdges.Add(null);
+                    claimEdges.Add(EdgeStore.NullHandle);
                 }
             }
         }
@@ -307,7 +324,7 @@ internal class SmoothingFilterInitializer
                 {
                     for (var i = range.Item1; i < range.Item2; i++)
                     {
-                        if (BuildNeighbors(i, vertices[i], claimEdges[i], vertexToIndex, neighborIndices, neighborWeights, scratch))
+                        if (BuildNeighbors(i, vertices[i], claimEdges[i], store!, vertexToIndex, neighborIndices, neighborWeights, scratch))
                             scratch.BuiltCount++;
                     }
 
@@ -375,13 +392,14 @@ internal class SmoothingFilterInitializer
     private static bool BuildNeighbors(
         int vertexIndex,
         IVertex a,
-        IQuadEdge? claimEdge,
+        int claimEdge,
+        EdgeStore store,
         Dictionary<IVertex, int> vertexToIndex,
         int[][] neighborIndices,
         float[][] neighborWeights,
         NeighborScratch scratch)
     {
-        if (claimEdge == null)
+        if (claimEdge < 0)
             return false;
 
         // Don't smooth constraint member vertices - check via Vertex cast
@@ -390,7 +408,7 @@ internal class SmoothingFilterInitializer
 
         var pList = scratch.Polygon;
         pList.Clear();
-        if (!TryGetConnectedPolygon(claimEdge, pList) || pList.Count < 3)
+        if (!TryGetConnectedPolygon(store, claimEdge, pList) || pList.Count < 3)
             return false;
 
         var w = scratch.Barycentric.GetBarycentricCoordinates(pList, a.X, a.Y);
@@ -431,30 +449,28 @@ internal class SmoothingFilterInitializer
 
     /// <summary>
     ///     Collects the connected polygon around the claimed edge's A vertex into
-    ///     <paramref name="vList" />. A manual pinwheel walk replacing the historical
-    ///     enumerator (same traversal, same termination semantics, no per-vertex
-    ///     iterator allocations).
+    ///     <paramref name="vList" />. A handle-native pinwheel walk (same traversal
+    ///     and termination semantics as the historical enumerator).
     /// </summary>
     /// <returns>False when the vertex must not be smoothed (constrained or perimeter).</returns>
-    private static bool TryGetConnectedPolygon(IQuadEdge start, List<Vertex> vList)
+    private static bool TryGetConnectedPolygon(EdgeStore store, int start, List<Vertex> vList)
     {
         var s = start;
         while (true)
         {
-            // If this edge or its dual is constrained, the vertex is on a constraint boundary
-            // and we shouldn't smooth across constraints
-            if (s.IsConstrained() || s.GetDual().IsConstrained())
+            // If the edge is constrained, the vertex is on a constraint boundary
+            // and we shouldn't smooth across constraints. (Constraint bits are
+            // shared by both sides of a pair, so this also covers the dual.)
+            if (store.ConstraintBits(s) < 0)
                 return false;
-
-            var b = s.GetB();
 
             // If any neighbor is null/ghost, the vertex is on the perimeter
             // and doesn't have valid barycentric coordinates
-            if (b == null || b.IsNullVertex())
+            if (store.IsNullA(s ^ 1))
                 return false;
 
             // Only include real Vertex instances
-            if (b is Vertex v)
+            if (store.VertexA(s ^ 1) is Vertex v)
             {
                 // Also skip if the neighbor is a constraint member - this ensures
                 // we don't pull values from vertices on constraint boundaries
@@ -463,22 +479,17 @@ internal class SmoothingFilterInitializer
                 vList.Add(v);
             }
 
-            IQuadEdge? next;
-            try
-            {
-                next = s.GetDualFromReverse();
-            }
-            catch
-            {
-                // The historical pinwheel enumerator ends the iteration on any traversal
-                // failure; the polygon collected so far is used as-is.
-                return true;
-            }
-
-            if (ReferenceEquals(next, start))
+            // Dual-from-reverse; an unset reverse link ends the iteration and the
+            // polygon collected so far is used as-is (historical behavior).
+            var r = store.Reverse(s);
+            if (r < 0)
                 return true;
 
-            s = next!;
+            var next = r ^ 1;
+            if (next == start)
+                return true;
+
+            s = next;
         }
     }
 
