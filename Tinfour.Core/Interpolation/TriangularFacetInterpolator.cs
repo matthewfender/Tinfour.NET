@@ -33,6 +33,7 @@
 namespace Tinfour.Core.Interpolation;
 
 using Tinfour.Core.Common;
+using Tinfour.Core.Edge;
 
 /// <summary>
 ///     Provides interpolation based on treating the surface as a collection
@@ -43,6 +44,12 @@ public class TriangularFacetInterpolator : IInterpolatorOverTin
     private readonly VertexValuatorDefault _defaultValuator = new();
 
     private readonly IIncrementalTinNavigator _navigator;
+
+    /// <summary>
+    ///     The navigator downcast to its handle-native concrete type; null only
+    ///     if a custom IIncrementalTinNavigator implementation is in play.
+    /// </summary>
+    private readonly IncrementalTinNavigator? _fastNavigator;
 
     private readonly double _precisionThreshold;
 
@@ -117,7 +124,26 @@ public class TriangularFacetInterpolator : IInterpolatorOverTin
 
         _tin = tin;
         _navigator = tin.GetNavigator();
+        _fastNavigator = _navigator as IncrementalTinNavigator;
         ConstrainedRegionsOnly = constrainedRegionsOnly;
+    }
+
+    /// <summary>
+    ///     Locates the neighbor edge of (x, y), preferring the handle-native
+    ///     navigator path.
+    /// </summary>
+    private int GetNeighborEdgeHandle(double x, double y, out EdgeStore s)
+    {
+        if (_fastNavigator != null)
+        {
+            var h = _fastNavigator.GetNeighborEdgeHandle(x, y);
+            s = _fastNavigator.GetStore()!;
+            return h;
+        }
+
+        var e = (QuadEdge)_navigator.GetNeighborEdge(x, y);
+        s = e.GetStore();
+        return e.GetHandle();
     }
 
     public bool ConstrainedRegionsOnly { get; }
@@ -186,7 +212,7 @@ public class TriangularFacetInterpolator : IInterpolatorOverTin
         // Check if TIN is bootstrapped first
         if (!_tin.IsBootstrapped()) return double.NaN;
 
-        var edge = _navigator.GetNeighborEdge(x, y);
+        var edge = GetNeighborEdgeHandle(x, y, out var s);
         if (ConstrainedRegionsOnly)
         {
             // Check if ANY edge of the triangle is marked as interior to a constraint region.
@@ -195,42 +221,52 @@ public class TriangularFacetInterpolator : IInterpolatorOverTin
             //
             // Note: Border edges alone don't qualify - they touch the boundary but the triangle
             // might be on the outside. Interior edges mean the triangle is definitely inside.
-            var edgeFwd = edge.GetForward();
-            var edgeRev = edge.GetReverse();
-
-            var isInConstrainedRegion = edge.IsConstraintRegionInterior()
-                                     || edgeFwd.IsConstraintRegionInterior()
-                                     || edgeRev.IsConstraintRegionInterior();
+            var isInConstrainedRegion =
+                ((s.ConstraintBits(edge)
+                  | s.ConstraintBits(s.Forward(edge))
+                  | s.ConstraintBits(s.Reverse(edge)))
+                 & QuadEdgeConstants.ConstraintRegionInteriorFlag) != 0;
 
             if (!isInConstrainedRegion)
                 return double.NaN;
         }
 
-        var v0 = edge.GetA();
-        var v1 = edge.GetB();
-        var v2 = edge.GetForward().GetB();
+        var fwd = s.Forward(edge);
+        var v2h = fwd ^ 1;
+
+        var v0x = s.Ax(edge);
+        var v0y = s.Ay(edge);
+        var v1x = s.Ax(edge ^ 1);
+        var v1y = s.Ay(edge ^ 1);
+        var v2x = s.Ax(v2h);
+        var v2y = s.Ay(v2h);
+        var v2IsNull = double.IsNaN(v2x);
+
+        var sx = x - v0x;
+        var sy = y - v0y;
 
         // Check MaxInterpolationDistance if set
         if (_maxInterpolationDistance.HasValue)
         {
-            var d0 = v0.GetDistanceSq(x, y);
-            var d1 = v1.GetDistanceSq(x, y);
-            var d2 = v2.IsNullVertex() ? double.MaxValue : v2.GetDistanceSq(x, y);
+            var d0 = sx * sx + sy * sy;
+            var d1 = (x - v1x) * (x - v1x) + (y - v1y) * (y - v1y);
+            var d2 = v2IsNull ? double.MaxValue : (x - v2x) * (x - v2x) + (y - v2y) * (y - v2y);
             var minDistSq = Math.Min(d0, Math.Min(d1, d2));
             if (minDistSq > _maxInterpolationDistance2)
                 return double.NaN;
         }
 
+        var v0 = s.VertexA(edge);
+        var v1 = s.VertexA(edge ^ 1);
+
         var z0 = vq.Value(v0);
         var z1 = vq.Value(v1);
-        var sx = x - v0.X;
-        var sy = y - v0.Y;
 
-        var ax = v1.X - v0.X;
-        var ay = v1.Y - v0.Y;
+        var ax = v1x - v0x;
+        var ay = v1y - v0y;
         var az = z1 - z0;
 
-        if (v2.IsNullVertex())
+        if (v2IsNull)
         {
             // (x,y) is either on perimeter or outside the TIN.
             // if on perimeter, apply linear interpolation
@@ -251,21 +287,22 @@ public class TriangularFacetInterpolator : IInterpolatorOverTin
             return double.NaN;
         }
 
+        var v2 = s.VertexA(v2h);
         var z2 = vq.Value(v2);
 
-        var bx = v2.X - v0.X;
-        var by = v2.Y - v0.Y;
+        var bx = v2x - v0x;
+        var by = v2y - v0y;
         var bz = z2 - z0;
 
         _nx = ay * bz - az * by;
         _ny = az * bx - ax * bz;
         _nz = ax * by - ay * bx;
 
-        if (v0.GetDistanceSq(x, y) < _vertexTolerance2) return z0;
+        if (sx * sx + sy * sy < _vertexTolerance2) return z0;
 
-        if (v1.GetDistanceSq(x, y) < _vertexTolerance2) return z1;
+        if ((x - v1x) * (x - v1x) + (y - v1y) * (y - v1y) < _vertexTolerance2) return z1;
 
-        if (v2.GetDistanceSq(x, y) < _vertexTolerance2) return z2;
+        if ((x - v2x) * (x - v2x) + (y - v2y) * (y - v2y) < _vertexTolerance2) return z2;
 
         if (Math.Abs(_nz) < _precisionThreshold) return (z0 + z1 + z2) / 3.0;
 
@@ -318,23 +355,31 @@ public class TriangularFacetInterpolator : IInterpolatorOverTin
         // Check if TIN is bootstrapped first
         if (!_tin.IsBootstrapped()) return double.NaN;
 
-        var e = _navigator.GetNeighborEdge(x, y);
+        var e = GetNeighborEdgeHandle(x, y, out var s);
 
-        if (e == null)
+        var fwd = s.Forward(e);
+        var v2h = fwd ^ 1;
 
-            // this should happen only when TIN is not bootstrapped
-            return double.NaN;
+        var v0 = s.VertexA(e);
+        var v1 = s.VertexA(e ^ 1);
 
-        var v0 = e.GetA();
-        var v1 = e.GetB();
-        var v2 = e.GetForward().GetB();
+        var v0x = s.Ax(e);
+        var v0y = s.Ay(e);
+        var v1x = s.Ax(e ^ 1);
+        var v1y = s.Ay(e ^ 1);
+        var v2x = s.Ax(v2h);
+        var v2y = s.Ay(v2h);
+        var v2IsNull = double.IsNaN(v2x);
+
+        var sx = x - v0x;
+        var sy = y - v0y;
 
         // Check MaxInterpolationDistance if set
         if (_maxInterpolationDistance.HasValue)
         {
-            var d0 = v0.GetDistanceSq(x, y);
-            var d1 = v1.GetDistanceSq(x, y);
-            var d2 = v2.IsNullVertex() ? double.MaxValue : v2.GetDistanceSq(x, y);
+            var d0 = sx * sx + sy * sy;
+            var d1 = (x - v1x) * (x - v1x) + (y - v1y) * (y - v1y);
+            var d2 = v2IsNull ? double.MaxValue : (x - v2x) * (x - v2x) + (y - v2y) * (y - v2y);
             var minDistSq = Math.Min(d0, Math.Min(d1, d2));
             if (minDistSq > _maxInterpolationDistance2)
                 return double.NaN;
@@ -342,14 +387,12 @@ public class TriangularFacetInterpolator : IInterpolatorOverTin
 
         var z0 = vq.Value(v0);
         var z1 = vq.Value(v1);
-        var sx = x - v0.X;
-        var sy = y - v0.Y;
 
-        var ax = v1.X - v0.X;
-        var ay = v1.Y - v0.Y;
+        var ax = v1x - v0x;
+        var ay = v1y - v0y;
         var az = z1 - z0;
 
-        if (v2.IsNullVertex())
+        if (v2IsNull)
         {
             // (x,y) is either on perimeter edge or outside the TIN.
             // project it down to the perimeter edge and interpolate
@@ -391,21 +434,22 @@ public class TriangularFacetInterpolator : IInterpolatorOverTin
             return z;
         }
 
+        var v2 = s.VertexA(v2h);
         var z2 = vq.Value(v2);
 
-        var bx = v2.X - v0.X;
-        var by = v2.Y - v0.Y;
+        var bx = v2x - v0x;
+        var by = v2y - v0y;
         var bz = z2 - z0;
 
         _nx = ay * bz - az * by;
         _ny = az * bx - ax * bz;
         _nz = ax * by - ay * bx;
 
-        if (v0.GetDistanceSq(x, y) < _vertexTolerance2) return z0;
+        if (sx * sx + sy * sy < _vertexTolerance2) return z0;
 
-        if (v1.GetDistanceSq(x, y) < _vertexTolerance2) return z1;
+        if ((x - v1x) * (x - v1x) + (y - v1y) * (y - v1y) < _vertexTolerance2) return z1;
 
-        if (v2.GetDistanceSq(x, y) < _vertexTolerance2) return z2;
+        if ((x - v2x) * (x - v2x) + (y - v2y) * (y - v2y) < _vertexTolerance2) return z2;
 
         if (Math.Abs(_nz) < _precisionThreshold) return (z0 + z1 + z2) / 3.0;
 

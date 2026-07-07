@@ -21,7 +21,8 @@
  * Date     Name         Description
  * ------   ---------    -------------------------------------------------
  * 08/2014  G. Lucas     Created
- * 08/2025 M.Fender     Ported to C#
+ * 08/2025  M. Fender    Ported to C#
+ * 07/2026  M. Fender    Handle-native point location (#832)
  *
  * Notes:
  *
@@ -31,6 +32,7 @@
 namespace Tinfour.Core.Interpolation;
 
 using Tinfour.Core.Common;
+using Tinfour.Core.Edge;
 
 /// <summary>
 ///     Provides navigation services for interpolation operations using
@@ -42,7 +44,9 @@ public class IncrementalTinNavigator : IIncrementalTinNavigator
 
     private readonly StochasticLawsonsWalk _walker;
 
-    private IQuadEdge? _searchEdge;
+    private EdgeStore? _store;
+
+    private int _searchHandle = EdgeStore.NullHandle;
 
     /// <summary>
     ///     Constructs a navigator for the specified TIN.
@@ -63,23 +67,47 @@ public class IncrementalTinNavigator : IIncrementalTinNavigator
     /// <returns>An edge from the containing triangle or perimeter edge</returns>
     public IQuadEdge GetNeighborEdge(double x, double y)
     {
+        var h = GetNeighborEdgeHandle(x, y);
+        return _store!.Wrap(h);
+    }
+
+    /// <summary>
+    ///     Handle-native point location: returns the handle of an edge from the
+    ///     triangle containing the coordinates (or the associated perimeter edge).
+    ///     The search edge is retained between queries, so a series of nearby
+    ///     requests starts each walk close to its target.
+    /// </summary>
+    /// <param name="x">The x coordinate for point location</param>
+    /// <param name="y">The y coordinate for point location</param>
+    /// <returns>The handle of an edge from the containing triangle or perimeter edge</returns>
+    internal int GetNeighborEdgeHandle(double x, double y)
+    {
         if (!_tin.IsBootstrapped()) throw new InvalidOperationException("TIN is not bootstrapped");
 
-        // Get a starting edge if we don't have one. Use the streaming iterator rather than
-        // GetEdges(): the latter materialises a full List of every edge (~240 MB for a 10M-vertex
-        // TIN) just to read element 0 — and rasterization creates one navigator per worker
-        // thread, multiplying that transient by the core count.
-        if (_searchEdge == null)
+        if (_searchHandle < 0)
         {
-            _searchEdge = _tin.GetEdgeIterator().FirstOrDefault()
-                          ?? throw new InvalidOperationException("No edges available in TIN");
+            // Seed the search from the first available edge. Use the streaming
+            // iterator rather than GetEdges(): the latter materialises a full
+            // List of every edge just to read element 0 — and rasterization
+            // creates one navigator per worker thread, multiplying that
+            // transient by the core count.
+            var first = (QuadEdge?)_tin.GetEdgeIterator().FirstOrDefault()
+                        ?? throw new InvalidOperationException("No edges available in TIN");
+            _store = first.GetStore();
+            _searchHandle = first.GetHandle();
         }
 
-        // Use the walker to find the containing triangle
-        // note that we save the returned edge since it is common during interpolations that we get a request
-        // for a series of nearby points. Saving the edge allows us to start the search from a more optimal location.
-        _searchEdge = _walker.FindAnEdgeFromEnclosingTriangle(_searchEdge, x, y);
-        return _searchEdge;
+        _searchHandle = _walker.FindAnEdgeFromEnclosingTriangle(_store!, _searchHandle, x, y);
+        return _searchHandle;
+    }
+
+    /// <summary>
+    ///     Gets the edge store used by this navigator. Valid after the first
+    ///     point-location query.
+    /// </summary>
+    internal EdgeStore? GetStore()
+    {
+        return _store;
     }
 
     /// <summary>
@@ -87,7 +115,8 @@ public class IncrementalTinNavigator : IIncrementalTinNavigator
     /// </summary>
     public void ResetForChangeToTin()
     {
-        _searchEdge = null;
+        _searchHandle = EdgeStore.NullHandle;
+        _store = null;
         _walker.Reset();
     }
 
@@ -115,45 +144,38 @@ public class IncrementalTinNavigator : IIncrementalTinNavigator
     /// <returns>The nearest vertex, or null if the TIN is empty</returns>
     public IVertex? GetNearestVertex(double x, double y)
     {
-        var edge = GetNeighborEdge(x, y);
-        if (edge == null)
-            return null;
+        var h = GetNeighborEdgeHandle(x, y);
+        var s = _store!;
 
         // Check the three vertices of the containing triangle
-        var a = edge.GetA();
-        var b = edge.GetB();
-        var c = edge.GetForward().GetB();
-
         IVertex? nearest = null;
         var minDist = double.PositiveInfinity;
 
-        if (!a.IsNullVertex())
+        var dax = s.Ax(h) - x;
+        var day = s.Ay(h) - y;
+        var dA = dax * dax + day * day;
+        if (dA < minDist)
         {
-            var d = a.GetDistanceSq(x, y);
-            if (d < minDist)
-            {
-                minDist = d;
-                nearest = a;
-            }
+            minDist = dA;
+            nearest = s.VertexA(h);
         }
 
-        if (!b.IsNullVertex())
+        var dbx = s.Ax(h ^ 1) - x;
+        var dby = s.Ay(h ^ 1) - y;
+        var dB = dbx * dbx + dby * dby;
+        if (dB < minDist)
         {
-            var d = b.GetDistanceSq(x, y);
-            if (d < minDist)
-            {
-                minDist = d;
-                nearest = b;
-            }
+            minDist = dB;
+            nearest = s.VertexA(h ^ 1);
         }
 
-        if (!c.IsNullVertex())
+        var c = s.Forward(h) ^ 1;
+        var dcx = s.Ax(c) - x;
+        var dcy = s.Ay(c) - y;
+        var dC = dcx * dcx + dcy * dcy;
+        if (dC < minDist)
         {
-            var d = c.GetDistanceSq(x, y);
-            if (d < minDist)
-            {
-                nearest = c;
-            }
+            nearest = s.VertexA(c);
         }
 
         return nearest;
