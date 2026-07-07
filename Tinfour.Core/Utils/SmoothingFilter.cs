@@ -240,8 +240,11 @@ internal class SmoothingFilterInitializer
 
         // Handle-native sweep over allocated pairs in ascending slot order —
         // the same enumeration order as GetEdgeIterator(), reading the store's
-        // arrays directly.
-        var store = (tin as IncrementalTin)?.GetEdgePoolInternal().Store;
+        // arrays directly. For a custom IIncrementalTin implementation the
+        // store is resolved from the first edge (all edges are flyweights over
+        // an EdgeStore), keeping parity with ContourBuilderForTin.
+        var store = (tin as IncrementalTin)?.GetEdgePoolInternal().Store
+                    ?? ((QuadEdge?)tin.GetEdgeIterator().FirstOrDefault())?.GetStore();
         if (store != null)
         {
             for (var pair = 0; pair < store.PairHighWater; pair++)
