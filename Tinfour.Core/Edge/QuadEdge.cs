@@ -399,20 +399,7 @@ public class QuadEdge : IQuadEdge
     /// <param name="constraintIndex">A positive integer in the range zero to 32766, or -1 for a null constraint.</param>
     public void SetConstraintBorderIndex(int constraintIndex)
     {
-        // Border index is stored in lower bits (same as interior - they're mutually exclusive)
-        // This allows up to 32,766 polygon constraints
-        if (constraintIndex < -1 || constraintIndex > QuadEdgeConstants.ConstraintLowerIndexValueMax)
-            throw new ArgumentOutOfRangeException(
-                nameof(constraintIndex),
-                $"Border constraint index out of range [0..{QuadEdgeConstants.ConstraintLowerIndexValueMax}]");
-
-        // Preserve line constraint info in upper bits, clear lower bits and set border
-        var bits = Store.ConstraintBits(Handle);
-        bits = (bits & QuadEdgeConstants.ConstraintUpperIndexMask)
-               | QuadEdgeConstants.ConstraintEdgeFlag
-               | QuadEdgeConstants.ConstraintRegionBorderFlag
-               | QuadEdgeConstants.PackLowerIndex(constraintIndex);
-        Store.SetConstraintBits(Handle, bits);
+        Store.SetConstraintBorderIndex(Handle, constraintIndex);
     }
 
     /// <summary>
@@ -499,27 +486,7 @@ public class QuadEdge : IQuadEdge
     /// <param name="constraintIndex">A positive integer in the range 0 to 32766, or -1 for a null value</param>
     public void SetConstraintRegionInteriorIndex(int constraintIndex)
     {
-        var bits = Store.ConstraintBits(Handle);
-        if (constraintIndex < 0)
-        {
-            bits &= ~QuadEdgeConstants.ConstraintLowerIndexMask;
-            bits &= ~QuadEdgeConstants.ConstraintRegionInteriorFlag;
-            Store.SetConstraintBits(Handle, bits);
-            return;
-        }
-
-        // Border edges take precedence - don't overwrite them with interior status
-        if (IsConstraintRegionBorder()) return;
-
-        if (constraintIndex > QuadEdgeConstants.ConstraintLowerIndexValueMax)
-            throw new ArgumentOutOfRangeException(
-                nameof(constraintIndex),
-                $"Constraint index out of range [0..{QuadEdgeConstants.ConstraintLowerIndexValueMax}]");
-
-        bits = (bits & ~QuadEdgeConstants.ConstraintLowerIndexMask)
-               | QuadEdgeConstants.PackLowerIndex(constraintIndex)
-               | QuadEdgeConstants.ConstraintRegionInteriorFlag;
-        Store.SetConstraintBits(Handle, bits);
+        Store.SetConstraintRegionInteriorIndex(Handle, constraintIndex);
     }
 
     /// <summary>

@@ -221,6 +221,54 @@ internal sealed class EdgeStore
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal int GenerationOf(int h) => _generation[h >> 1];
 
+    /// <summary>
+    ///     Sets the region-border flag and border constraint index on the pair
+    ///     containing the handle (packing shared with QuadEdge's setter).
+    /// </summary>
+    internal void SetConstraintBorderIndex(int h, int constraintIndex)
+    {
+        if (constraintIndex < -1 || constraintIndex > QuadEdgeConstants.ConstraintLowerIndexValueMax)
+            throw new ArgumentOutOfRangeException(
+                nameof(constraintIndex),
+                $"Border constraint index out of range [0..{QuadEdgeConstants.ConstraintLowerIndexValueMax}]");
+
+        var pair = h >> 1;
+        _constraintBits[pair] = (_constraintBits[pair] & QuadEdgeConstants.ConstraintUpperIndexMask)
+                                | QuadEdgeConstants.ConstraintEdgeFlag
+                                | QuadEdgeConstants.ConstraintRegionBorderFlag
+                                | QuadEdgeConstants.PackLowerIndex(constraintIndex);
+    }
+
+    /// <summary>
+    ///     Sets the region-interior flag and constraint index on the pair
+    ///     containing the handle (packing shared with QuadEdge's setter).
+    ///     Border edges take precedence and are left unchanged.
+    /// </summary>
+    internal void SetConstraintRegionInteriorIndex(int h, int constraintIndex)
+    {
+        var pair = h >> 1;
+        var bits = _constraintBits[pair];
+
+        if (constraintIndex < 0)
+        {
+            bits &= ~QuadEdgeConstants.ConstraintLowerIndexMask;
+            bits &= ~QuadEdgeConstants.ConstraintRegionInteriorFlag;
+            _constraintBits[pair] = bits;
+            return;
+        }
+
+        if ((bits & QuadEdgeConstants.ConstraintRegionBorderFlag) != 0) return;
+
+        if (constraintIndex > QuadEdgeConstants.ConstraintLowerIndexValueMax)
+            throw new ArgumentOutOfRangeException(
+                nameof(constraintIndex),
+                $"Constraint index out of range [0..{QuadEdgeConstants.ConstraintLowerIndexValueMax}]");
+
+        _constraintBits[pair] = (bits & ~QuadEdgeConstants.ConstraintLowerIndexMask)
+                                | QuadEdgeConstants.PackLowerIndex(constraintIndex)
+                                | QuadEdgeConstants.ConstraintRegionInteriorFlag;
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void SetConstraintBits(int h, int bits) => _constraintBits[h >> 1] = bits;
 

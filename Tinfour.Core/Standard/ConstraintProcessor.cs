@@ -560,51 +560,53 @@ public class ConstraintProcessor
 
     private void FloodFillConstrainedRegionsQueue(int constraintIndex, BitArray visited, IQuadEdge firstEdge)
     {
+        // Handle-native flood fill: topology and constraint bits are read and
+        // written directly on the store's arrays.
+        var s = ((QuadEdge)firstEdge).GetStore();
+
         // Using an ArrayDeque (Java) equivalent - Queue in C#
-        var deque = new Queue<IQuadEdge>();
+        var deque = new Queue<int>();
         var maxQueueSize = 0;
 
-        deque.Enqueue(firstEdge);
+        deque.Enqueue(((QuadEdge)firstEdge).GetHandle());
 
         while (deque.Count > 0)
         {
             if (deque.Count > maxQueueSize) maxQueueSize = deque.Count;
 
             var e = deque.Peek();
-            var f = e.GetForward();
-            var fIndex = f.GetIndex();
+            var f = s.Forward(e);
 
-            if (!visited[fIndex])
+            if (!visited[f])
             {
-                visited[fIndex] = true;
-                if (f.IsConstraintRegionBorder())
+                visited[f] = true;
+                if ((s.ConstraintBits(f) & QuadEdgeConstants.ConstraintRegionBorderFlag) != 0)
                 {
                     // Border edges keep their border status but also get the constraint index set
-                    f.SetConstraintBorderIndex(constraintIndex);
+                    s.SetConstraintBorderIndex(f, constraintIndex);
                 }
                 else
                 {
-                    f.SetConstraintRegionInteriorIndex(constraintIndex);
-                    deque.Enqueue(f.GetDual());
+                    s.SetConstraintRegionInteriorIndex(f, constraintIndex);
+                    deque.Enqueue(f ^ 1);
                 }
                 continue;
             }
 
-            var r = e.GetReverse();
-            var rIndex = r.GetIndex();
+            var r = s.Reverse(e);
 
-            if (!visited[rIndex])
+            if (!visited[r])
             {
-                visited[rIndex] = true;
-                if (r.IsConstraintRegionBorder())
+                visited[r] = true;
+                if ((s.ConstraintBits(r) & QuadEdgeConstants.ConstraintRegionBorderFlag) != 0)
                 {
                     // Border edges keep their border status but also get the constraint index set
-                    r.SetConstraintBorderIndex(constraintIndex);
+                    s.SetConstraintBorderIndex(r, constraintIndex);
                 }
                 else
                 {
-                    r.SetConstraintRegionInteriorIndex(constraintIndex);
-                    deque.Enqueue(r.GetDual());
+                    s.SetConstraintRegionInteriorIndex(r, constraintIndex);
+                    deque.Enqueue(r ^ 1);
                 }
                 continue;
             }

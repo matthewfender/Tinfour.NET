@@ -1141,7 +1141,7 @@ public class IncrementalTin : IIncrementalTin
     /// <param name="e">An edge from the perimeter of the TIN</param>
     /// <param name="v">The vertex to be added</param>
     /// <returns>An edge connected to the new vertex</returns>
-    private IQuadEdge ExtendTin(IQuadEdge e, IVertex v)
+    private int ExtendTin(EdgeStore s, int e, IVertex v)
     {
         // This method is based on the Guibas and Stolfi paper, with a modification
         // from the Sloan paper.  It is also presented in some detail in the
@@ -1158,32 +1158,33 @@ public class IncrementalTin : IIncrementalTin
         // The existing TIN is to the right of e.
         // The dual of e is on the ghost-triangle side of the TIN.
         // Create a new edge connecting B to v.
-        var n1 = _edgePool.AllocateEdge(e.GetB(), v);
+        var n1 = _edgePool.AllocateEdgeHandle(s.VertexB(e), v);
 
         // Create a new edge connecting v to A
-        var n2 = _edgePool.AllocateEdge(v, e.GetA());
+        var n2 = _edgePool.AllocateEdgeHandle(v, s.VertexA(e));
 
         // Link the new edges to each other and to the perimeter.
-        n1.SetForward(n2);
-        n2.SetForward(e.GetDual().GetForward());
-        e.GetDual().SetForward(n1);
+        s.SetForward(n1, n2);
+        s.SetForward(n2, s.Forward(e ^ 1));
+        s.SetForward(e ^ 1, n1);
+
+        var vx = v.X;
+        var vy = v.Y;
 
         // Now, walk around the perimeter checking the Delaunay criterion
         // and flipping edges as required.
         while (true)
         {
-            var n3 = n1.GetDual().GetForward();
-            var a = n3.GetA();
-            var b = n3.GetB();
+            var n3 = s.Forward(n1 ^ 1);
 
             // A negative half-plane value indicates that v is to the right of n3.
-            if (_geoOp.HalfPlane(a.X, a.Y, b.X, b.Y, v.X, v.Y) < 0)
+            if (_geoOp.HalfPlane(s.Ax(n3), s.Ay(n3), s.Ax(n3 ^ 1), s.Ay(n3 ^ 1), vx, vy) < 0)
             {
                 // The new vertex v is to the right of n3.
                 // This indicates that the edge n3 is not on the convex hull
                 // of the point set and must be flipped.
-                _edgePool.FlipEdge(n1);
-                n1 = n1.GetReverse();
+                _edgePool.FlipEdgeHandle(n1);
+                n1 = s.Reverse(n1);
             }
             else
             {
@@ -1199,7 +1200,7 @@ public class IncrementalTin : IIncrementalTin
         // uses the last inserted edge as a starting point for its search.
         // Note: Constraint flag clearing is done by the caller (InsertVertex)
         // after this method returns, using the returned edge's pinwheel.
-        return n2.GetDual();
+        return n2 ^ 1;
     }
 
     /// <summary>
@@ -1380,7 +1381,7 @@ public class IncrementalTin : IIncrementalTin
         if (s.IsNullA(searchEdge ^ 1))
         {
             // Extend the TIN to include this new vertex
-            var extendResult = ExtendTin(s.Wrap(searchEdge), v);
+            var extendResult = s.Wrap(ExtendTin(s, searchEdge, v));
 
             // After extending the hull, clear stale constraint region flags on all
             // edges around the new vertex. Since v was outside the convex hull, it is

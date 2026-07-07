@@ -200,8 +200,15 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(edge);
 
+        FlipEdgeHandle(((QuadEdge)edge).GetHandle());
+    }
+
+    /// <summary>
+    ///     Handle-native counterpart of FlipEdge for the hot build paths.
+    /// </summary>
+    internal void FlipEdgeHandle(int e)
+    {
         var s = _store;
-        var e = ((QuadEdge)edge).GetHandle();
         var ed = e ^ 1;
 
         // Edges around the two adjacent triangles
