@@ -116,6 +116,33 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
     }
 
     /// <summary>
+    ///     Allocates an edge pair with the specified vertices and returns its
+    ///     base handle. Handle-native counterpart of AllocateEdge for the hot
+    ///     build paths; skips the disposed check (internal callers only operate
+    ///     on live pools).
+    /// </summary>
+    internal int AllocateEdgeHandle(IVertex a, IVertex b)
+    {
+        var h = _store.AllocatePair();
+        _nAllocationOperations++;
+        _store.SetVertices(h, a, b);
+        return h;
+    }
+
+    /// <summary>
+    ///     Deallocates the pair containing the handle. Handle-native
+    ///     counterpart of DeallocateEdge for the hot build paths.
+    /// </summary>
+    internal void DeallocateEdgeHandle(int h)
+    {
+        var baseIndex = h & ~1;
+        _linearConstraintMap.Remove(baseIndex);
+        _linearConstraintMap.Remove(baseIndex | 1);
+        _store.DeallocatePair(baseIndex);
+        _nFreeOperations++;
+    }
+
+    /// <summary>
     ///     Deallocates all edges, returning them to the free state.
     ///     Does not release storage.
     /// </summary>

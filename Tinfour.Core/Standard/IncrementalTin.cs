@@ -1108,14 +1108,31 @@ public class IncrementalTin : IIncrementalTin
 
     private QuadEdge? CheckTriangleVerticesForMatch(QuadEdge baseEdge, double x, double y, double distanceTolerance2)
     {
-        var sEdge = baseEdge;
-        if (sEdge.GetA().GetDistanceSq(x, y) < distanceTolerance2) return sEdge;
+        var s = baseEdge.GetStore();
+        var match = CheckTriangleVerticesForMatch(s, baseEdge.GetHandle(), x, y, distanceTolerance2);
+        return match < 0 ? null : s.Wrap(match);
+    }
 
-        if (sEdge.GetB().GetDistanceSq(x, y) < distanceTolerance2) return (QuadEdge)sEdge.GetDual();
+    /// <summary>
+    ///     Handle-native triangle-vertex match check. Distance math on ghost
+    ///     sides yields NaN comparisons, which are never within tolerance.
+    /// </summary>
+    private static int CheckTriangleVerticesForMatch(EdgeStore s, int h, double x, double y, double distanceTolerance2)
+    {
+        var dax = s.Ax(h) - x;
+        var day = s.Ay(h) - y;
+        if (dax * dax + day * day < distanceTolerance2) return h;
 
-        var v2 = sEdge.GetForward().GetB();
-        if (!v2.IsNullVertex() && v2.GetDistanceSq(x, y) < distanceTolerance2) return (QuadEdge)sEdge.GetReverse();
-        return null;
+        var dbx = s.Ax(h ^ 1) - x;
+        var dby = s.Ay(h ^ 1) - y;
+        if (dbx * dbx + dby * dby < distanceTolerance2) return h ^ 1;
+
+        var f = s.Forward(h);
+        var dcx = s.Ax(f ^ 1) - x;
+        var dcy = s.Ay(f ^ 1) - y;
+        if (dcx * dcx + dcy * dcy < distanceTolerance2) return s.Reverse(h);
+
+        return EdgeStore.NullHandle;
     }
 
     /// <summary>
@@ -1235,12 +1252,12 @@ public class IncrementalTin : IIncrementalTin
     ///     Computes the distance from a point to an edge segment.
     ///     This matches Java's IncrementalTinNavigator.edgeDistance method.
     /// </summary>
-    private static double EdgeDistance(IVertex A, IVertex B, double x, double y)
+    private static double EdgeDistance(double aX, double aY, double bX, double bY, double x, double y)
     {
-        var dX = x - A.X;
-        var dY = y - A.Y;
-        var vX = B.X - A.X;
-        var vY = B.Y - A.Y;
+        var dX = x - aX;
+        var dY = y - aY;
+        var vX = bX - aX;
+        var vY = bY - aY;
         var vM = Math.Sqrt(vX * vX + vY * vY);  // magnitude of vector (vX, vY)
         var t = (dX * vX + dY * vY) / vM;
         if (t < 0)
@@ -1253,9 +1270,9 @@ public class IncrementalTin : IIncrementalTin
         {
             // (x,y) is beyond the end of the edge.
             // report the distance from the ending vertex.
-            var bX = x - B.X;
-            var bY = y - B.Y;
-            return Math.Sqrt(bX * bX + bY * bY);
+            var eX = x - bX;
+            var eY = y - bY;
+            return Math.Sqrt(eX * eX + eY * eY);
         }
         // report the perpendicular distance from the line.
         var pX = -vY;
@@ -1267,23 +1284,26 @@ public class IncrementalTin : IIncrementalTin
     ///     Finds the nearest edge of a triangle to the given point.
     ///     This matches Java's IncrementalTinNavigator.getNearestEdge logic.
     /// </summary>
-    private static IQuadEdge GetNearestEdgeInTriangle(IQuadEdge a, double x, double y)
+    private static int GetNearestEdgeInTriangle(EdgeStore s, int a, double x, double y)
     {
-        var b = a.GetForward();
-        var c = a.GetReverse();
+        var b = s.Forward(a);
+        var c = s.Reverse(a);
 
-        var A = a.GetA();
-        var B = b.GetA();
-        var C = c.GetA();
+        var aX = s.Ax(a);
+        var aY = s.Ay(a);
+        var bX = s.Ax(b);
+        var bY = s.Ay(b);
+        var cX = s.Ax(c);
+        var cY = s.Ay(c);
 
         // Compute distance to edge a (from A to B)
-        var pMin = EdgeDistance(A, B, x, y);
+        var pMin = EdgeDistance(aX, aY, bX, bY, x, y);
         var e = a;
 
         // Check distance to edge b (from B to C)
-        if (!C.IsNullVertex())
+        if (!double.IsNaN(cX))
         {
-            var test = EdgeDistance(B, C, x, y);
+            var test = EdgeDistance(bX, bY, cX, cY, x, y);
             if (test < pMin)
             {
                 pMin = test;
@@ -1291,7 +1311,7 @@ public class IncrementalTin : IIncrementalTin
             }
 
             // Check distance to edge c (from C to A)
-            test = EdgeDistance(C, A, x, y);
+            test = EdgeDistance(cX, cY, aX, aY, x, y);
             if (test < pMin)
             {
                 e = c;
@@ -1301,19 +1321,19 @@ public class IncrementalTin : IIncrementalTin
         return e;
     }
 
-    private double InCircleWithGhosts(IVertex a, IVertex b, IVertex v)
+    private double InCircleWithGhosts(double aX, double aY, double bX, double bY, double vx, double vy)
     {
-        var h = (v.X - a.X) * (a.Y - b.Y) + (v.Y - a.Y) * (b.X - a.X);
+        var h = (vx - aX) * (aY - bY) + (vy - aY) * (bX - aX);
         var hp = _thresholds.GetHalfPlaneThreshold();
         if (-hp < h && h < hp)
         {
-            h = _geoOp.HalfPlane(a.X, a.Y, b.X, b.Y, v.X, v.Y);
+            h = _geoOp.HalfPlane(aX, aY, bX, bY, vx, vy);
             if (h == 0)
             {
-                var ax = v.X - a.X;
-                var ay = v.Y - a.Y;
-                var nx = b.X - a.X;
-                var ny = b.Y - a.Y;
+                var ax = vx - aX;
+                var ay = vy - aY;
+                var nx = bX - aX;
+                var ny = bY - aY;
                 var can = ax * nx + ay * ny;
                 if (can < 0) h = -1;
                 else if (ax * ax + ay * ay > nx * nx + ny * ny) h = -1;
@@ -1344,25 +1364,23 @@ public class IncrementalTin : IIncrementalTin
             if (_searchEdge == null) throw new InvalidOperationException("No starting edge available in TIN");
         }
 
+        var s = _edgePool.Store;
+
         // Find the triangle that contains the new vertex
-        var searchEdge = _walker.FindAnEdgeFromEnclosingTriangle(_searchEdge, x, y);
+        var searchEdge = _walker.FindAnEdgeFromEnclosingTriangle(s, ((QuadEdge)_searchEdge).GetHandle(), x, y);
 
         // Check if vertex already exists at this location (within tolerance)
-        var matchEdge = CheckTriangleVerticesForMatch(
-            (QuadEdge)searchEdge,
-            x,
-            y,
-            _thresholds.GetVertexTolerance2());
-        if (matchEdge != null)
+        var matchEdge = CheckTriangleVerticesForMatch(s, searchEdge, x, y, _thresholds.GetVertexTolerance2());
+        if (matchEdge >= 0)
 
             // Vertex already exists in TIN, return the edge pointing to it
-            return matchEdge;
+            return s.Wrap(matchEdge);
 
         // If we're inserting outside the current convex hull
-        if (searchEdge.GetB().IsNullVertex())
+        if (s.IsNullA(searchEdge ^ 1))
         {
             // Extend the TIN to include this new vertex
-            var extendResult = ExtendTin(searchEdge, v);
+            var extendResult = ExtendTin(s.Wrap(searchEdge), v);
 
             // After extending the hull, clear stale constraint region flags on all
             // edges around the new vertex. Since v was outside the convex hull, it is
@@ -1385,10 +1403,10 @@ public class IncrementalTin : IIncrementalTin
         // region detection - we need to check the NEAREST edge, not just any edge.
         // Java's IncrementalTinNavigator.getNearestEdge computes distances to all
         // three edges and returns the nearest one.
-        searchEdge = GetNearestEdgeInTriangle(searchEdge, x, y);
+        searchEdge = GetNearestEdgeInTriangle(s, searchEdge, x, y);
 
         // Get anchor AFTER finding nearest edge (matching Java's order)
-        var anchor = searchEdge.GetA();
+        var anchor = s.VertexA(searchEdge);
 
         // Check if we're inserting inside a constraint region.
         // IMPORTANT: Use IsConstraintRegionInterior(), NOT IsConstraintRegionMember().
@@ -1403,122 +1421,128 @@ public class IncrementalTin : IIncrementalTin
         if (_constraintList.Count > 0)
         {
             var eA = searchEdge;
-            var eB = searchEdge.GetForward();
-            var eC = searchEdge.GetReverse();
+            var eB = s.Forward(searchEdge);
+            var eC = s.Reverse(searchEdge);
 
-            IQuadEdge? memberEdge = null;
-            if (eA.IsConstraintRegionInterior()) memberEdge = eA;
-            else if (eB.IsConstraintRegionInterior()) memberEdge = eB;
-            else if (eC.IsConstraintRegionInterior()) memberEdge = eC;
+            var memberEdge = EdgeStore.NullHandle;
+            if ((s.ConstraintBits(eA) & QuadEdgeConstants.ConstraintRegionInteriorFlag) != 0) memberEdge = eA;
+            else if ((s.ConstraintBits(eB) & QuadEdgeConstants.ConstraintRegionInteriorFlag) != 0) memberEdge = eB;
+            else if ((s.ConstraintBits(eC) & QuadEdgeConstants.ConstraintRegionInteriorFlag) != 0) memberEdge = eC;
 
-            if (memberEdge != null)
+            if (memberEdge >= 0)
             {
-                var con = GetRegionConstraint(memberEdge);
+                var con = GetRegionConstraint(s.Wrap(memberEdge));
                 if (con != null)
                     vertexConstraintIndex = con.GetConstraintIndex();
             }
         }
 
-        // Insert within existing TIN - Implementation of Lawson's algorithm
-        QuadEdge? buffer = null;
-        var c = (QuadEdge)searchEdge;
+        // Insert within existing TIN - Implementation of Lawson's algorithm.
+        // Handle-native: all topology and coordinate reads go straight to the
+        // store's arrays; edge wrappers are only materialized for the returned
+        // edge and cold branches.
+        var buffer = EdgeStore.NullHandle;
+        var c = searchEdge;
 
         // Create first edge from new vertex to an anchor
-        var pStart = (QuadEdge)_edgePool.AllocateEdge(v, anchor);
+        var pStart = _edgePool.AllocateEdgeHandle(v, anchor);
         var p = pStart;
 
         // Connect first edge into existing triangle
-        p.SetForward(searchEdge);
-        var n1 = (QuadEdge)searchEdge.GetForward();
-        var n2 = (QuadEdge)n1.GetForward();
-        n2.SetForward(p.GetDual());
+        s.SetForward(p, searchEdge);
+        var n1 = s.Forward(searchEdge);
+        var n2 = s.Forward(n1);
+        s.SetForward(n2, p ^ 1);
 
         // Keep going until we're done - this is the core of the insertion algorithm
         while (true)
         {
-            var n0 = (QuadEdge)c.GetDual();
-            n1 = (QuadEdge)n0.GetForward();
+            var n0 = c ^ 1;
+            n1 = s.Forward(n0);
 
-            // Check Delaunay criterion
+            // Check Delaunay criterion (ghost sides read as NaN coordinates)
             double h;
-            var vA = n0.GetA();
-            var vB = n1.GetA();
-            var vC = n1.GetB();
+            var aX = s.Ax(n0);
+            var aY = s.Ay(n0);
+            var bX = s.Ax(n1);
+            var bY = s.Ay(n1);
+            var cX = s.Ax(n1 ^ 1);
+            var cY = s.Ay(n1 ^ 1);
 
-            // Special handling for ghost triangles
-            if (vC.IsNullVertex()) h = InCircleWithGhosts(vA, vB, v);
-            else if (vA.IsNullVertex()) h = InCircleWithGhosts(vB, vC, v);
-            else if (vB.IsNullVertex()) h = InCircleWithGhosts(vC, vA, v);
+            if (double.IsNaN(cX)) h = InCircleWithGhosts(aX, aY, bX, bY, x, y);
+            else if (double.IsNaN(aX)) h = InCircleWithGhosts(bX, bY, cX, cY, x, y);
+            else if (double.IsNaN(bX)) h = InCircleWithGhosts(cX, cY, aX, aY, x, y);
             else
 
                 // Standard in-circle test for non-ghost triangles
-                h = _geoOp.InCircle(vA, vB, vC, v);
+                h = _geoOp.InCircle(aX, aY, bX, bY, cX, cY, x, y);
 
             // If h >= 0, the Delaunay criterion is not met, so we may need to flip the edge.
             // CRITICAL: Never flip constrained edges - they must remain in place to maintain
             // the constraint geometry. This matches Java's behavior at line 1359.
-            var edgeViolatesDelaunay = h >= 0 && !c.IsConstrained();
+            var edgeViolatesDelaunay = h >= 0 && s.ConstraintBits(c) >= 0;
 
             if (edgeViolatesDelaunay)
             {
                 // Edge flip procedure
-                n2 = (QuadEdge)n1.GetForward();
-                n2.SetForward(c.GetForward());
-                p.SetForward(n1);
+                n2 = s.Forward(n1);
+                s.SetForward(n2, s.Forward(c));
+                s.SetForward(p, n1);
 
-                if (buffer == null)
+                if (buffer < 0)
                 {
-                    // We need to get the base reference to ensure ghost edges 
-                    // start with a non-null vertex and end with null
-                    c = (QuadEdge)c.GetBaseReference();
-                    c.Clear();
+                    // Retain the pair as scratch. Buffer the base side so ghost
+                    // edges start with a non-null vertex and end with null.
+                    c &= ~1;
+                    s.ClearPairState(c >> 1);
                     buffer = c;
                 }
                 else
                 {
-                    _edgePool.DeallocateEdge(c);
+                    _edgePool.DeallocateEdgeHandle(c);
                 }
 
                 c = n1;
             }
             else
             {
-                // Check for completion of circuit
-                if (c.GetB() == anchor)
+                // Check for completion of circuit. Reference identity, matching
+                // the previous object design (interface == compares references).
+                if (ReferenceEquals(s.VertexA(c ^ 1), anchor))
                 {
-                    pStart.GetDual().SetForward(p);
+                    s.SetForward(pStart ^ 1, p);
 
                     // Return unused buffer edge to the pool if it exists
-                    if (buffer != null) _edgePool.DeallocateEdge(buffer);
+                    if (buffer >= 0) _edgePool.DeallocateEdgeHandle(buffer);
 
                     // Propagate constraint region membership to all newly created edges
                     // This is essential for Ruppert refinement to work correctly
                     if (vertexConstraintIndex >= 0)
                     {
-                        PropagateConstraintRegionMembership(pStart, vertexConstraintIndex);
+                        PropagateConstraintRegionMembership((QuadEdge)s.Wrap(pStart), vertexConstraintIndex);
                     }
 
-                    return pStart;
+                    return s.Wrap(pStart);
                 }
 
                 // Continue with next edge
-                n1 = (QuadEdge)c.GetForward();
-                QuadEdge e;
+                n1 = s.Forward(c);
+                int e;
 
-                if (buffer == null)
+                if (buffer < 0)
                 {
-                    e = (QuadEdge)_edgePool.AllocateEdge(v, c.GetB());
+                    e = _edgePool.AllocateEdgeHandle(v, s.VertexA(c ^ 1));
                 }
                 else
                 {
-                    buffer.SetVertices(v, c.GetB());
+                    s.SetVertices(buffer, v, s.VertexA(c ^ 1));
                     e = buffer;
-                    buffer = null;
+                    buffer = EdgeStore.NullHandle;
                 }
 
-                e.SetForward(n1);
-                e.GetDual().SetForward(p);
-                c.SetForward(e.GetDual());
+                s.SetForward(e, n1);
+                s.SetForward(e ^ 1, p);
+                s.SetForward(c, e ^ 1);
                 p = e;
                 c = n1;
             }

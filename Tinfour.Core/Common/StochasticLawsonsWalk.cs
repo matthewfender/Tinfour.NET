@@ -35,6 +35,8 @@ namespace Tinfour.Core.Common;
 
 using System.Diagnostics;
 
+using Tinfour.Core.Edge;
+
 /// <summary>
 ///     Methods and definitions to perform a stochastic Lawson's walk.
 ///     The walk uses randomization to prevent getting trapped in infinite loops
@@ -155,19 +157,39 @@ public class StochasticLawsonsWalk
     {
         ArgumentNullException.ThrowIfNull(startingEdge);
 
-        var edge = startingEdge;
+        var qe = (QuadEdge)startingEdge;
+        var store = qe.GetStore();
+        return store.Wrap(FindAnEdgeFromEnclosingTriangle(store, qe.GetHandle(), x, y));
+    }
 
-        if (edge.GetForward().GetB().IsNullVertex()) edge = edge.GetDual();
+    /// <summary>
+    ///     Handle-native core of the enclosing-triangle search. Reads topology
+    ///     and coordinates directly from the store's arrays; no edge or vertex
+    ///     objects are touched.
+    /// </summary>
+    /// <param name="s">The edge store of the TIN being searched</param>
+    /// <param name="startingHandle">The handle giving the starting point of the search</param>
+    /// <param name="x">The x coordinate of interest</param>
+    /// <param name="y">The y coordinate of interest</param>
+    /// <returns>The handle of an edge of a triangle containing the coordinates, or the nearest exterior edge</returns>
+    internal int FindAnEdgeFromEnclosingTriangle(EdgeStore s, int startingHandle, double x, double y)
+    {
+        var edge = startingHandle;
+
+        // If the starting edge borders the exterior, start from its dual
+        if (s.IsNullA(s.Forward(edge) ^ 1)) edge ^= 1;
 
         _nSlw++;
 
-        var v0 = edge.GetA();
-        var v1 = edge.GetB();
+        var a0x = s.Ax(edge);
+        var a0y = s.Ay(edge);
+        var b0x = s.Ax(edge ^ 1);
+        var b0y = s.Ay(edge ^ 1);
 
-        var vX0 = x - v0.GetX();
-        var vY0 = y - v0.GetY();
-        var pX0 = v0.GetY() - v1.GetY(); // perpendicular
-        var pY0 = v1.GetX() - v0.GetX();
+        var vX0 = x - a0x;
+        var vY0 = y - a0y;
+        var pX0 = a0y - b0y; // perpendicular
+        var pY0 = b0x - a0x;
 
         var h0 = vX0 * pX0 + vY0 * pY0;
 
@@ -175,18 +197,13 @@ public class StochasticLawsonsWalk
         if (h0 < _halfPlaneThresholdNeg)
         {
             // Transfer to opposite triangle
-            edge = edge.GetDual();
-            v0 = edge.GetA();
+            edge ^= 1;
         }
         else if (h0 < _halfPlaneThreshold)
         {
             // Coordinate is close to the edge, use high-precision calculation
-            h0 = _geometricOps.HalfPlane(v0.GetX(), v0.GetY(), v1.GetX(), v1.GetY(), x, y);
-            if (h0 < 0)
-            {
-                edge = edge.GetDual();
-                v0 = edge.GetA();
-            }
+            h0 = _geometricOps.HalfPlane(a0x, a0y, b0x, b0y, x, y);
+            if (h0 < 0) edge ^= 1;
         }
 
         var iterations = 0;
@@ -196,44 +213,37 @@ public class StochasticLawsonsWalk
             _nSlwSteps++;
 
             // Check if we've reached a ghost triangle (exterior)
-            v1 = edge.GetB();
-            var v2 = edge.GetForward().GetB();
-
-            if (v2.IsNullVertex()) return FindAssociatedPerimeterEdge(edge, x, y);
+            if (s.IsNullA(s.Forward(edge) ^ 1)) return FindAssociatedPerimeterEdge(s, edge, x, y);
 
             // Test the other two sides of the triangle with randomized order
             var edgeSelection = RandomNext();
             if ((edgeSelection & 1) == 0)
             {
                 // Test side 1 first, then side 2
-                if (TestAndTransfer(edge.GetForward(), x, y, out var nextEdge))
+                if (TestAndTransfer(s, s.Forward(edge), x, y, out var nextEdge))
                 {
                     edge = nextEdge;
-                    v0 = edge.GetA();
                     continue;
                 }
 
-                if (TestAndTransfer(edge.GetReverse(), x, y, out nextEdge))
+                if (TestAndTransfer(s, s.Reverse(edge), x, y, out nextEdge))
                 {
                     edge = nextEdge;
-                    v0 = edge.GetA();
                     continue;
                 }
             }
             else
             {
                 // Test side 2 first, then side 1
-                if (TestAndTransfer(edge.GetReverse(), x, y, out var nextEdge))
+                if (TestAndTransfer(s, s.Reverse(edge), x, y, out var nextEdge))
                 {
                     edge = nextEdge;
-                    v0 = edge.GetA();
                     continue;
                 }
 
-                if (TestAndTransfer(edge.GetForward(), x, y, out nextEdge))
+                if (TestAndTransfer(s, s.Forward(edge), x, y, out nextEdge))
                 {
                     edge = nextEdge;
-                    v0 = edge.GetA();
                     continue;
                 }
             }
@@ -274,26 +284,29 @@ public class StochasticLawsonsWalk
     /// <summary>
     ///     Finds the associated perimeter edge when the search reaches the exterior.
     /// </summary>
-    /// <param name="startingEdge">The starting edge for the perimeter search</param>
+    /// <param name="s">The edge store of the TIN being searched</param>
+    /// <param name="startingHandle">The starting edge handle for the perimeter search</param>
     /// <param name="x">The x coordinate of interest</param>
     /// <param name="y">The y coordinate of interest</param>
-    /// <returns>The exterior-side edge that subtends the search coordinates</returns>
-    private IQuadEdge FindAssociatedPerimeterEdge(IQuadEdge startingEdge, double x, double y)
+    /// <returns>The handle of the exterior-side edge that subtends the search coordinates</returns>
+    private int FindAssociatedPerimeterEdge(EdgeStore s, int startingHandle, double x, double y)
     {
-        var edge = startingEdge;
+        var edge = startingHandle;
         _nSlwGhost++;
 
-        var v0 = edge.GetA();
-        var v1 = edge.GetB();
+        var v0x = s.Ax(edge);
+        var v0y = s.Ay(edge);
+        var v1x = s.Ax(edge ^ 1);
+        var v1y = s.Ay(edge ^ 1);
 
-        var vX0 = x - v0.GetX();
-        var vY0 = y - v0.GetY();
-        var tX = v1.GetX() - v0.GetX();
-        var tY = v1.GetY() - v0.GetY();
+        var vX0 = x - v0x;
+        var vY0 = y - v0y;
+        var tX = v1x - v0x;
+        var tY = v1y - v0y;
         var tC = tX * vX0 + tY * vY0;
 
         if (_halfPlaneThresholdNeg < tC && tC < _halfPlaneThreshold)
-            tC = _geometricOps.Direction(v0.GetX(), v0.GetY(), v1.GetX(), v1.GetY(), x, y);
+            tC = _geometricOps.Direction(v0x, v0y, v1x, v1y, x, y);
 
         var iterations = 0;
 
@@ -305,15 +318,17 @@ public class StochasticLawsonsWalk
             {
                 _nSlwSteps++;
 
-                var nEdge = edge.GetReverse().GetReverseFromDual();
+                var nEdge = s.Reverse(s.Reverse(edge) ^ 1);
 
-                v0 = nEdge.GetA();
-                v1 = nEdge.GetB();
+                v0x = s.Ax(nEdge);
+                v0y = s.Ay(nEdge);
+                v1x = s.Ax(nEdge ^ 1);
+                v1y = s.Ay(nEdge ^ 1);
 
-                vX0 = x - v0.GetX();
-                vY0 = y - v0.GetY();
-                tX = v1.GetX() - v0.GetX();
-                tY = v1.GetY() - v0.GetY();
+                vX0 = x - v0x;
+                vY0 = y - v0y;
+                tX = v1x - v0x;
+                tY = v1y - v0y;
                 var pX = -tY;
                 var pY = tX;
                 var h = pX * vX0 + pY * vY0;
@@ -321,7 +336,7 @@ public class StochasticLawsonsWalk
                 if (h < _halfPlaneThresholdNeg) break;
                 if (h < _halfPlaneThreshold)
                 {
-                    h = _geometricOps.HalfPlane(v0.GetX(), v0.GetY(), v1.GetX(), v1.GetY(), x, y);
+                    h = _geometricOps.HalfPlane(v0x, v0y, v1x, v1y, x, y);
                     if (h <= 0) break;
                 }
 
@@ -331,7 +346,7 @@ public class StochasticLawsonsWalk
                 if (tC > _halfPlaneThreshold) break;
                 if (tC > _halfPlaneThresholdNeg)
                 {
-                    tC = _geometricOps.Direction(v0.GetX(), v0.GetY(), v1.GetX(), v1.GetY(), x, y);
+                    tC = _geometricOps.Direction(v0x, v0y, v1x, v1y, x, y);
                     if (tC >= 0) break;
                 }
             }
@@ -343,15 +358,17 @@ public class StochasticLawsonsWalk
             {
                 _nSlwSteps++;
 
-                var nEdge = edge.GetForward().GetForwardFromDual();
+                var nEdge = s.Forward(s.Forward(edge) ^ 1);
 
-                v0 = nEdge.GetA();
-                v1 = nEdge.GetB();
+                v0x = s.Ax(nEdge);
+                v0y = s.Ay(nEdge);
+                v1x = s.Ax(nEdge ^ 1);
+                v1y = s.Ay(nEdge ^ 1);
 
-                vX0 = x - v0.GetX();
-                vY0 = y - v0.GetY();
-                tX = v1.GetX() - v0.GetX();
-                tY = v1.GetY() - v0.GetY();
+                vX0 = x - v0x;
+                vY0 = y - v0y;
+                tX = v1x - v0x;
+                tY = v1y - v0y;
                 var pX = -tY;
                 var pY = tX;
                 var h = pX * vX0 + pY * vY0;
@@ -359,7 +376,7 @@ public class StochasticLawsonsWalk
                 if (h < _halfPlaneThresholdNeg) break;
                 if (h < _halfPlaneThreshold)
                 {
-                    h = _geometricOps.HalfPlane(v0.GetX(), v0.GetY(), v1.GetX(), v1.GetY(), x, y);
+                    h = _geometricOps.HalfPlane(v0x, v0y, v1x, v1y, x, y);
                     if (h <= 0) break;
                 }
 
@@ -367,7 +384,7 @@ public class StochasticLawsonsWalk
                 if (tC < _halfPlaneThresholdNeg) break;
                 if (tC < _halfPlaneThreshold)
                 {
-                    tC = _geometricOps.Direction(v0.GetX(), v0.GetY(), v1.GetX(), v1.GetY(), x, y);
+                    tC = _geometricOps.Direction(v0x, v0y, v1x, v1y, x, y);
                     if (tC <= 0) break;
                 }
 
@@ -398,36 +415,39 @@ public class StochasticLawsonsWalk
     /// <summary>
     ///     Tests a triangle side for potential transfer and performs the transfer if needed.
     /// </summary>
-    /// <param name="sideEdge">The edge representing the side to test</param>
+    /// <param name="s">The edge store of the TIN being searched</param>
+    /// <param name="sideEdge">The handle of the side to test</param>
     /// <param name="x">The x coordinate being searched for</param>
     /// <param name="y">The y coordinate being searched for</param>
-    /// <param name="nextEdge">The next edge if transfer occurs</param>
+    /// <param name="nextEdge">The next edge handle if transfer occurs</param>
     /// <returns>True if transfer occurred; otherwise false</returns>
-    private bool TestAndTransfer(IQuadEdge sideEdge, double x, double y, out IQuadEdge nextEdge)
+    private bool TestAndTransfer(EdgeStore s, int sideEdge, double x, double y, out int nextEdge)
     {
         _nSlwTests++;
 
-        var v1 = sideEdge.GetA();
-        var v2 = sideEdge.GetB();
+        var v1x = s.Ax(sideEdge);
+        var v1y = s.Ay(sideEdge);
+        var v2x = s.Ax(sideEdge ^ 1);
+        var v2y = s.Ay(sideEdge ^ 1);
 
-        var vX1 = x - v1.GetX();
-        var vY1 = y - v1.GetY();
-        var pX1 = v1.GetY() - v2.GetY(); // perpendicular
-        var pY1 = v2.GetX() - v1.GetX();
+        var vX1 = x - v1x;
+        var vY1 = y - v1y;
+        var pX1 = v1y - v2y; // perpendicular
+        var pY1 = v2x - v1x;
         var h1 = vX1 * pX1 + vY1 * pY1;
 
         if (h1 < _halfPlaneThresholdNeg)
         {
-            nextEdge = sideEdge.GetDual();
+            nextEdge = sideEdge ^ 1;
             return true;
         }
 
         if (h1 < _halfPlaneThreshold)
         {
-            h1 = _geometricOps.HalfPlane(v1.GetX(), v1.GetY(), v2.GetX(), v2.GetY(), x, y);
+            h1 = _geometricOps.HalfPlane(v1x, v1y, v2x, v2y, x, y);
             if (h1 < 0)
             {
-                nextEdge = sideEdge.GetDual();
+                nextEdge = sideEdge ^ 1;
                 return true;
             }
         }

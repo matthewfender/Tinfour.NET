@@ -84,6 +84,18 @@ internal sealed class EdgeStore
     private IVertex[] _v;
 
     /// <summary>
+    ///     Coordinate mirrors of the A vertex per directed handle, written when
+    ///     the vertex is assigned. Hot loops (walk, in-circle, flip) read these
+    ///     instead of dereferencing IVertex, removing interface dispatch and
+    ///     object chasing from the build path. NaN for ghost sides (the null
+    ///     vertex's coordinates are NaN by construction, and no real vertex can
+    ///     have a NaN X and participate in triangulation).
+    /// </summary>
+    private double[] _ax;
+
+    private double[] _ay;
+
+    /// <summary>
     ///     Packed constraint flags/indices per edge pair (the bits previously
     ///     held in QuadEdgePartner._index). Shared by both sides of the pair.
     /// </summary>
@@ -130,6 +142,8 @@ internal sealed class EdgeStore
         _f = new int[InitialPairCapacity * 2];
         _r = new int[InitialPairCapacity * 2];
         _v = new IVertex[InitialPairCapacity * 2];
+        _ax = new double[InitialPairCapacity * 2];
+        _ay = new double[InitialPairCapacity * 2];
         _constraintBits = new int[InitialPairCapacity];
         _wrappers = new QuadEdge?[InitialPairCapacity * 2];
         _allocatedPairs = new bool[InitialPairCapacity];
@@ -139,6 +153,8 @@ internal sealed class EdgeStore
         Array.Fill(_f, NullHandle);
         Array.Fill(_r, NullHandle);
         Array.Fill(_v, Vertex.Null);
+        Array.Fill(_ax, double.NaN);
+        Array.Fill(_ay, double.NaN);
     }
 
     /// <summary>
@@ -175,6 +191,26 @@ internal sealed class EdgeStore
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal IVertex VertexB(int h) => _v[h ^ 1];
+
+    /// <summary>
+    ///     X coordinate of the A vertex of the handle; NaN for a ghost side.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal double Ax(int h) => _ax[h];
+
+    /// <summary>
+    ///     Y coordinate of the A vertex of the handle; NaN for a ghost side.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal double Ay(int h) => _ay[h];
+
+    /// <summary>
+    ///     Indicates whether the A vertex of the handle is the ghost (null)
+    ///     vertex. Uses the NaN coordinate mirror: the null vertex's X is NaN
+    ///     by construction and no participating vertex can have a NaN X.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool IsNullA(int h) => double.IsNaN(_ax[h]);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal int ConstraintBits(int h) => _constraintBits[h >> 1];
@@ -215,7 +251,20 @@ internal sealed class EdgeStore
     internal void SetReverseDirect(int h, int r) => _r[h] = r;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void SetVertexA(int h, IVertex a) => _v[h] = a;
+    internal void SetVertexA(int h, IVertex a)
+    {
+        _v[h] = a;
+        if (a is Vertex plain)
+        {
+            _ax[h] = plain.X;
+            _ay[h] = plain.Y;
+        }
+        else
+        {
+            _ax[h] = a.X;
+            _ay[h] = a.Y;
+        }
+    }
 
     /// <summary>
     ///     Sets both vertices of the pair containing h, relative to side h.
@@ -223,8 +272,8 @@ internal sealed class EdgeStore
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void SetVertices(int h, IVertex a, IVertex b)
     {
-        _v[h] = a;
-        _v[h ^ 1] = b;
+        SetVertexA(h, a);
+        SetVertexA(h ^ 1, b);
     }
 
     // ---------- Wrappers ----------
@@ -319,6 +368,10 @@ internal sealed class EdgeStore
         _r[h | 1] = NullHandle;
         _v[h] = Vertex.Null;
         _v[h | 1] = Vertex.Null;
+        _ax[h] = double.NaN;
+        _ay[h] = double.NaN;
+        _ax[h | 1] = double.NaN;
+        _ay[h | 1] = double.NaN;
         _constraintBits[pair] = 0;
     }
 
@@ -364,6 +417,8 @@ internal sealed class EdgeStore
         Array.Resize(ref _f, newHandleCapacity);
         Array.Resize(ref _r, newHandleCapacity);
         Array.Resize(ref _v, newHandleCapacity);
+        Array.Resize(ref _ax, newHandleCapacity);
+        Array.Resize(ref _ay, newHandleCapacity);
         Array.Resize(ref _constraintBits, newPairCapacity);
         Array.Resize(ref _wrappers, newHandleCapacity);
         Array.Resize(ref _allocatedPairs, newPairCapacity);
@@ -372,5 +427,7 @@ internal sealed class EdgeStore
         Array.Fill(_f, NullHandle, oldHandleCapacity, newHandleCapacity - oldHandleCapacity);
         Array.Fill(_r, NullHandle, oldHandleCapacity, newHandleCapacity - oldHandleCapacity);
         Array.Fill(_v, Vertex.Null, oldHandleCapacity, newHandleCapacity - oldHandleCapacity);
+        Array.Fill(_ax, double.NaN, oldHandleCapacity, newHandleCapacity - oldHandleCapacity);
+        Array.Fill(_ay, double.NaN, oldHandleCapacity, newHandleCapacity - oldHandleCapacity);
     }
 }
