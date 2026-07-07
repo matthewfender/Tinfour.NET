@@ -31,7 +31,8 @@ public class QuadEdgePartnerTests
     public void CombiningMultipleConstraintTypes_ShouldMaintainAllFlags()
     {
         // Arrange
-        var primary = new QuadEdge(42);
+        var pool = new EdgePool();
+        var primary = (QuadEdge)pool.AllocateUndefinedEdge();
         var partner = (QuadEdgePartner)primary.GetDual();
 
         // Act
@@ -52,7 +53,8 @@ public class QuadEdgePartnerTests
     public void CombiningMultipleConstraintTypes_ShouldMaintainAllFlagsAndIndices()
     {
         // Arrange
-        var primary = new QuadEdge(42);
+        var pool = new EdgePool();
+        var primary = (QuadEdge)pool.AllocateUndefinedEdge();
         var partner = (QuadEdgePartner)primary.GetDual();
 
         // Act - border and line now use separate bit fields (lower 15 and upper 12 bits)
@@ -74,20 +76,22 @@ public class QuadEdgePartnerTests
     public void Constructor_ShouldCreateDualWithIncrementedIndex()
     {
         // Arrange
-        var primary = new QuadEdge(42);
+        var pool = new EdgePool();
+        var primary = (QuadEdge)pool.AllocateUndefinedEdge();
 
-        // Act - QuadEdgePartner is created by the QuadEdge constructor
+        // Act - QuadEdgePartner is the dual (odd-handle) side of the pair
         var partner = (QuadEdgePartner)primary.GetDual();
 
-        // Assert
-        Assert.Equal(43, partner.GetIndex());
+        // Assert - partner index = base index + 1 (pool-assigned indices, #832)
+        Assert.Equal(primary.GetIndex() + 1, partner.GetIndex());
     }
 
     [Fact]
     public void SetConstraintBorderIndex_ShouldSetCorrectFlags()
     {
         // This test verifies that the FLAGS work correctly (which is what the demo uses)
-        var primary = new QuadEdge(42);
+        var pool = new EdgePool();
+        var primary = (QuadEdge)pool.AllocateUndefinedEdge();
         var partner = (QuadEdgePartner)primary.GetDual();
 
         partner.SetConstraintBorderIndex(7);
@@ -108,7 +112,8 @@ public class QuadEdgePartnerTests
     public void SetConstraintBorderIndex_ShouldSetCorrectIndexAndFlags()
     {
         // Arrange
-        var primary = new QuadEdge(42);
+        var pool = new EdgePool();
+        var primary = (QuadEdge)pool.AllocateUndefinedEdge();
         var partner = (QuadEdgePartner)primary.GetDual();
 
         // Act
@@ -127,7 +132,8 @@ public class QuadEdgePartnerTests
     public void SetConstraintBorderIndex_WithNegativeValue_ShouldClearBorderIndexAndFlags()
     {
         // Arrange
-        var primary = new QuadEdge(42);
+        var pool = new EdgePool();
+        var primary = (QuadEdge)pool.AllocateUndefinedEdge();
         var partner = (QuadEdgePartner)primary.GetDual();
         partner.SetConstraintBorderIndex(7);
 
@@ -148,7 +154,8 @@ public class QuadEdgePartnerTests
     public void SetConstraintBorderIndex_WithNegativeValue_ShouldStoreNullIndexButKeepFlags()
     {
         // Arrange
-        var primary = new QuadEdge(42);
+        var pool = new EdgePool();
+        var primary = (QuadEdge)pool.AllocateUndefinedEdge();
         var partner = (QuadEdgePartner)primary.GetDual();
         partner.SetConstraintBorderIndex(7);
 
@@ -165,7 +172,8 @@ public class QuadEdgePartnerTests
     public void SetConstraintBorderIndex_WithTooLargeValue_ShouldThrowException()
     {
         // Arrange
-        var primary = new QuadEdge(42);
+        var pool = new EdgePool();
+        var primary = (QuadEdge)pool.AllocateUndefinedEdge();
         var partner = (QuadEdgePartner)primary.GetDual();
 
         // Act & Assert - border index now uses lower 15 bits (max 32766)
@@ -176,7 +184,8 @@ public class QuadEdgePartnerTests
     public void SetConstraintIndex_ShouldSetConstraintFlag()
     {
         // Arrange
-        var primary = new QuadEdge(42);
+        var pool = new EdgePool();
+        var primary = (QuadEdge)pool.AllocateUndefinedEdge();
         var partner = (QuadEdgePartner)primary.GetDual();
 
         // Act
@@ -191,7 +200,8 @@ public class QuadEdgePartnerTests
     public void SetConstraintIndex_WithNegativeValue_ShouldClearConstraintIndex()
     {
         // Arrange
-        var primary = new QuadEdge(42);
+        var pool = new EdgePool();
+        var primary = (QuadEdge)pool.AllocateUndefinedEdge();
         var partner = (QuadEdgePartner)primary.GetDual();
         partner.SetConstraintIndex(5);
 
@@ -207,7 +217,8 @@ public class QuadEdgePartnerTests
     public void SetConstraintIndex_WithTooLargeValue_ShouldThrowException()
     {
         // Arrange
-        var primary = new QuadEdge(42);
+        var pool = new EdgePool();
+        var primary = (QuadEdge)pool.AllocateUndefinedEdge();
         var partner = (QuadEdgePartner)primary.GetDual();
 
         // Act & Assert - constraint index now uses lower 15 bits (max 32766)
@@ -218,7 +229,8 @@ public class QuadEdgePartnerTests
     public void SetConstraintLineIndex_ShouldSetCorrectIndexAndFlags()
     {
         // Arrange
-        var primary = new QuadEdge(42);
+        var pool = new EdgePool();
+        var primary = (QuadEdge)pool.AllocateUndefinedEdge();
         var partner = (QuadEdgePartner)primary.GetDual();
 
         // Act
@@ -234,7 +246,8 @@ public class QuadEdgePartnerTests
     public void SetConstraintLineIndex_WithNegativeValue_ShouldClearIndexAndFlags()
     {
         // Arrange
-        var primary = new QuadEdge(42);
+        var pool = new EdgePool();
+        var primary = (QuadEdge)pool.AllocateUndefinedEdge();
         var partner = (QuadEdgePartner)primary.GetDual();
         partner.SetConstraintLineIndex(11);
 
@@ -250,7 +263,8 @@ public class QuadEdgePartnerTests
     public void SetConstraintLineMemberFlag_ShouldSetFlag()
     {
         // Arrange
-        var primary = new QuadEdge(42);
+        var pool = new EdgePool();
+        var primary = (QuadEdge)pool.AllocateUndefinedEdge();
         var partner = (QuadEdgePartner)primary.GetDual();
 
         // Act
@@ -264,7 +278,8 @@ public class QuadEdgePartnerTests
     public void SetConstraintRegionBorderFlag_ShouldSetBothFlagAndConstrainedStatus()
     {
         // Arrange
-        var primary = new QuadEdge(42);
+        var pool = new EdgePool();
+        var primary = (QuadEdge)pool.AllocateUndefinedEdge();
         var partner = (QuadEdgePartner)primary.GetDual();
 
         // Act
@@ -280,7 +295,8 @@ public class QuadEdgePartnerTests
     public void SetConstraintRegionInteriorIndex_ShouldSetCorrectIndexAndFlags()
     {
         // Arrange
-        var primary = new QuadEdge(42);
+        var pool = new EdgePool();
+        var primary = (QuadEdge)pool.AllocateUndefinedEdge();
         var partner = (QuadEdgePartner)primary.GetDual();
 
         // Act
@@ -297,7 +313,8 @@ public class QuadEdgePartnerTests
     public void SetConstraintRegionInteriorIndex_WithNegativeValue_ShouldClearIndexAndFlags()
     {
         // Arrange
-        var primary = new QuadEdge(42);
+        var pool = new EdgePool();
+        var primary = (QuadEdge)pool.AllocateUndefinedEdge();
         var partner = (QuadEdgePartner)primary.GetDual();
         partner.SetConstraintRegionInteriorIndex(9);
 
@@ -314,7 +331,8 @@ public class QuadEdgePartnerTests
     public void SetSynthetic_ShouldSetAndClearSyntheticFlag()
     {
         // Arrange
-        var primary = new QuadEdge(42);
+        var pool = new EdgePool();
+        var primary = (QuadEdge)pool.AllocateUndefinedEdge();
         var partner = (QuadEdgePartner)primary.GetDual();
 
         // Act

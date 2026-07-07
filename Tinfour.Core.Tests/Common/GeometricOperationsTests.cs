@@ -337,4 +337,37 @@ public class GeometricOperationsTests
         Assert.Equal(1, this._geoOps.OrientationTest(ccw, ccw2, ccw3)); // Counterclockwise
         Assert.Equal(-1, this._geoOps.OrientationTest(cw, cw2, cw3)); // Clockwise
     }
+
+    [Theory]
+    [InlineData(0, 0, 1, 1, 2, 2)] // diagonal collinear (GitHub issue repro)
+    [InlineData(0, 0, 1, 0, 2, 0)] // axis-aligned collinear
+    [InlineData(3, 3, 2, 2, 1, 1)] // diagonal collinear, reversed
+    [InlineData(0.25, 0.75, 1.25, 8.75, 2.25, 16.75)] // sloped collinear (dyadic-exact doubles)
+    public void HalfPlane_WithExactlyCollinearPoints_ShouldReturnZero(
+        double ax, double ay, double bx, double by, double cx, double cy)
+    {
+        // Exactly-collinear points fall into the extended-precision path, which
+        // historically computed a wrong x-term ((cx-ax) instead of (bx-ax)) and
+        // returned a confidently non-zero orientation for diagonal collinears.
+        Assert.Equal(0.0, this._geoOps.HalfPlane(ax, ay, bx, by, cx, cy));
+        Assert.Equal(0.0, this._geoOps.Area(ax, ay, bx, by, cx, cy));
+    }
+
+    [Fact]
+    public void IncrementalTin_WithOnlyCollinearVertices_ShouldNotBootstrap()
+    {
+        // With the broken predicate, Bootstrap accepted a zero-area seed
+        // triangle from diagonally collinear input and the next insertion
+        // corrupted the topology (GitHub issue repro).
+        var tin = new Tinfour.Core.Standard.IncrementalTin();
+        tin.Add(new List<IVertex>
+        {
+            new Vertex(0, 0, 0),
+            new Vertex(1, 1, 0),
+            new Vertex(2, 2, 0),
+            new Vertex(3, 3, 0),
+        });
+
+        Assert.False(tin.IsBootstrapped());
+    }
 }

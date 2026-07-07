@@ -27,7 +27,8 @@ public class QuadEdgeTests
     public void Constructor_ShouldCreateEdgeWithDual()
     {
         // Arrange & Act
-        var edge = new QuadEdge(0);
+        var pool = new EdgePool();
+        var edge = (QuadEdge)pool.AllocateUndefinedEdge();
 
         // Assert
         Assert.NotNull(edge.GetDual());
@@ -37,13 +38,14 @@ public class QuadEdgeTests
     [Fact]
     public void Constructor_WithIndex_ShouldSetIndexCorrectly()
     {
-        // Arrange & Act
-        var expectedIndex = 42;
-        var edge = new QuadEdge(expectedIndex);
+        // Arrange & Act - indices are pool-assigned sequentially (#832):
+        // the first allocation gets base index 0 and its dual base+1
+        var pool = new EdgePool();
+        var edge = (QuadEdge)pool.AllocateUndefinedEdge();
 
         // Assert
-        Assert.Equal(expectedIndex, edge.GetIndex());
-        Assert.Equal(expectedIndex + 1, edge.GetDual().GetIndex());
+        Assert.Equal(0, edge.GetIndex());
+        Assert.Equal(edge.GetIndex() + 1, edge.GetDual().GetIndex());
     }
 
     // [Fact]
@@ -62,7 +64,8 @@ public class QuadEdgeTests
     public void GetBaseReference_ShouldReturnEdgeWithEvenIndex()
     {
         // Arrange
-        var edge = new QuadEdge(42);
+        var pool = new EdgePool();
+        var edge = (QuadEdge)pool.AllocateUndefinedEdge();
         var dual = edge.GetDual();
 
         // Act & Assert
@@ -74,8 +77,9 @@ public class QuadEdgeTests
     public void GetDualFromReverse_ShouldReturnCorrectEdge()
     {
         // Arrange
-        var edge1 = new QuadEdge(10);
-        var edge2 = new QuadEdge(20);
+        var pool = new EdgePool();
+        var edge1 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var edge2 = (QuadEdge)pool.AllocateUndefinedEdge();
         edge1.SetReverse(edge2);
 
         // Act & Assert
@@ -86,8 +90,9 @@ public class QuadEdgeTests
     public void GetForwardFromDual_ShouldReturnCorrectEdge()
     {
         // Arrange
-        var edge1 = new QuadEdge(10);
-        var edge2 = new QuadEdge(20);
+        var pool = new EdgePool();
+        var edge1 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var edge2 = (QuadEdge)pool.AllocateUndefinedEdge();
         var dual = (QuadEdge)edge1.GetDual();
 
         // Act
@@ -101,7 +106,8 @@ public class QuadEdgeTests
     public void GetLength_ShouldCalculateCorrectDistance()
     {
         // Arrange
-        var edge = new QuadEdge(0);
+        var pool = new EdgePool();
+        var edge = (QuadEdge)pool.AllocateUndefinedEdge();
         var a = new Vertex(0, 0, 0);
         var b = new Vertex(3, 4, 0);
         edge.SetVertices(a, b);
@@ -117,7 +123,8 @@ public class QuadEdgeTests
     public void GetLength_WithGhostVertex_ShouldReturnInfinity()
     {
         // Arrange
-        var edge = new QuadEdge(0);
+        var pool = new EdgePool();
+        var edge = (QuadEdge)pool.AllocateUndefinedEdge();
         var a = new Vertex(0, 0, 0);
         edge.SetVertices(a, Vertex._NullVertex);
 
@@ -138,10 +145,11 @@ public class QuadEdgeTests
         var v3 = new Vertex(-1, 0, 0);
         var v4 = new Vertex(0, -1, 0);
 
-        var e1 = new QuadEdge(10);
-        var e2 = new QuadEdge(20);
-        var e3 = new QuadEdge(30);
-        var e4 = new QuadEdge(40);
+        var pool = new EdgePool();
+        var e1 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e2 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e3 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e4 = (QuadEdge)pool.AllocateUndefinedEdge();
 
         e1.SetVertices(center, v1);
         e2.SetVertices(center, v2);
@@ -174,8 +182,9 @@ public class QuadEdgeTests
     public void GetReverseFromDual_ShouldReturnCorrectEdge()
     {
         // Arrange
-        var edge1 = new QuadEdge(10);
-        var edge2 = new QuadEdge(20);
+        var pool = new EdgePool();
+        var edge1 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var edge2 = (QuadEdge)pool.AllocateUndefinedEdge();
         var dual = (QuadEdge)edge1.GetDual();
 
         // Act
@@ -189,9 +198,10 @@ public class QuadEdgeTests
     public void SetForwardAndReverse_ShouldConnectEdgesCorrectly()
     {
         // Arrange
-        var edge1 = new QuadEdge(10);
-        var edge2 = new QuadEdge(20);
-        var edge3 = new QuadEdge(30);
+        var pool = new EdgePool();
+        var edge1 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var edge2 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var edge3 = (QuadEdge)pool.AllocateUndefinedEdge();
 
         // Act
         edge1.SetForward(edge2);
@@ -206,7 +216,8 @@ public class QuadEdgeTests
     public void SetVertices_ShouldAssignVerticesToEdgeAndDual()
     {
         // Arrange
-        var edge = new QuadEdge(0);
+        var pool = new EdgePool();
+        var edge = (QuadEdge)pool.AllocateUndefinedEdge();
         var a = new Vertex(1, 2, 3);
         var b = new Vertex(4, 5, 6);
 
@@ -224,7 +235,8 @@ public class QuadEdgeTests
     public void ToString_ShouldIncludeVertexCoordinatesAndIndex()
     {
         // Arrange
-        var edge = new QuadEdge(42);
+        var pool = new EdgePool();
+        var edge = (QuadEdge)pool.AllocateUndefinedEdge();
         var a = new Vertex(1, 2, 0);
         var b = new Vertex(3, 4, 0);
         edge.SetVertices(a, b);
@@ -237,14 +249,16 @@ public class QuadEdgeTests
         Assert.Contains("2.0", result);
         Assert.Contains("3.0", result);
         Assert.Contains("4.0", result);
-        Assert.Contains("42", result);
+        // Index is pool-assigned (#832); assert the actual index appears in the "[n]" slot
+        Assert.Contains($"[{edge.GetIndex()}]", result);
     }
 
     [Fact]
     public void ToString_WithGhostVertex_ShouldIncludeGhostReference()
     {
         // Arrange
-        var edge = new QuadEdge(42);
+        var pool = new EdgePool();
+        var edge = (QuadEdge)pool.AllocateUndefinedEdge();
         var a = new Vertex(1, 2, 0);
         edge.SetVertices(a, Vertex._NullVertex);
 
@@ -255,14 +269,16 @@ public class QuadEdgeTests
         Assert.Contains("1.0", result);
         Assert.Contains("2.0", result);
         Assert.Contains("ghost", result);
-        Assert.Contains("42", result);
+        // Index is pool-assigned (#832); assert the actual index appears in the "[n]" slot
+        Assert.Contains($"[{edge.GetIndex()}]", result);
     }
 
     [Fact]
     public void TranscribeTo_ShouldProduceCorrectCoordinates()
     {
         // Arrange
-        var edge = new QuadEdge(0);
+        var pool = new EdgePool();
+        var edge = (QuadEdge)pool.AllocateUndefinedEdge();
         var a = new Vertex(1, 2, 0);
         var b = new Vertex(3, 4, 0);
         edge.SetVertices(a, b);
@@ -281,7 +297,8 @@ public class QuadEdgeTests
     public void TranscribeTo_WithGhostVertex_ShouldSetEndPointToNaN()
     {
         // Arrange
-        var edge = new QuadEdge(0);
+        var pool = new EdgePool();
+        var edge = (QuadEdge)pool.AllocateUndefinedEdge();
         var a = new Vertex(1, 2, 0);
         edge.SetVertices(a, Vertex._NullVertex);
 

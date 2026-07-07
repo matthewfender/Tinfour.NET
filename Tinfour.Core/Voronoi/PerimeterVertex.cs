@@ -70,11 +70,6 @@ internal class PerimeterVertex : IVertex
     /// </summary>
     public double Z { get; }
 
-    public Vertex AsVertex()
-    {
-        return _vertex.AsVertex();
-    }
-
     public bool Contains(Vertex vertex)
     {
         return _vertex.Contains(vertex);

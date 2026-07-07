@@ -51,6 +51,7 @@
 namespace Tinfour.Core.Interpolation;
 
 using Tinfour.Core.Common;
+using Tinfour.Core.Edge;
 
 /// <summary>
 ///     Provides interpolations based on Sibson's Natural Neighbor Interpolation
@@ -77,6 +78,26 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
     private readonly Circumcircle _pooledC1 = new();
     private readonly Circumcircle _pooledC2 = new();
     private readonly Circumcircle _pooledC3 = new();
+
+    // Reusable scratch collections for the Interpolate() hot path. Instances of this class
+    // are single-threaded by design (see the thread-safety remarks on the constructor) and
+    // rasterization calls Interpolate() once per grid cell, so allocating the envelope list,
+    // traversal stack and Sibson-weights array per call dominates allocation churn on large
+    // rasters. Public methods (GetBowyerWatsonEnvelope, GetSibsonCoordinates) still return
+    // freshly allocated collections; only the internal interpolation path uses the scratch.
+    // CONSTRAINT: an IVertexValuator passed to Interpolate() must not call back into this
+    // interpolator instance — the scratch buffers are live while vertex values are read
+    // (all current valuators are precomputed lookups: VertexValuatorDefault, SmoothingFilter,
+    // ReefMaster's NaNFillingValuator).
+    private readonly List<int> _envelopeScratch = [];
+    private readonly Stack<int> _envelopeStackScratch = new();
+    private double[] _weightsScratch = [];
+
+    /// <summary>
+    ///     The navigator downcast to its handle-native concrete type; null only
+    ///     if a custom IIncrementalTinNavigator implementation is in play.
+    /// </summary>
+    private readonly IncrementalTinNavigator? _fastNavigator;
 
     // Tolerance for identical vertices.
     // The tolerance factor for treating closely spaced or identical vertices
@@ -158,7 +179,26 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
 
         _tin = tin;
         _navigator = tin.GetNavigator();
+        _fastNavigator = _navigator as IncrementalTinNavigator;
         ConstrainedRegionsOnly = constrainedRegionsOnly;
+    }
+
+    /// <summary>
+    ///     Locates the neighbor edge of (x, y), preferring the handle-native
+    ///     navigator path.
+    /// </summary>
+    private int GetNeighborEdgeHandle(double x, double y, out EdgeStore s)
+    {
+        if (_fastNavigator != null)
+        {
+            var h = _fastNavigator.GetNeighborEdgeHandle(x, y);
+            s = _fastNavigator.GetStore()!;
+            return h;
+        }
+
+        var e = (QuadEdge)_navigator.GetNeighborEdge(x, y);
+        s = e.GetStore();
+        return e.GetHandle();
     }
 
     public bool ConstrainedRegionsOnly { get; }
@@ -215,25 +255,44 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
     /// <returns>A valid, potentially empty, list.</returns>
     public List<IQuadEdge> GetBowyerWatsonEnvelope(double x, double y)
     {
-        // In the logic below, we access the Vertex x and y coordinates directly
-        // but we use the GetZ() method to get the z value. Some vertices
-        // may actually be VertexMergerGroup instances
         var eList = new List<IQuadEdge>();
+        var handles = new List<int>();
+        var s = FillBowyerWatsonEnvelope(x, y, handles);
+        if (s != null)
+            foreach (var h in handles)
+                eList.Add(s.Wrap(h));
 
-        var locatorEdge = _navigator.GetNeighborEdge(x, y);
+        return eList;
+    }
 
-        if (locatorEdge == null)
+    /// <summary>
+    ///     Core implementation of <see cref="GetBowyerWatsonEnvelope"/>:
+    ///     handle-native, filling a caller-supplied list (cleared first) so the
+    ///     interpolation hot path can reuse a scratch list instead of allocating
+    ///     one per query. Returns the edge store, or null if the TIN was not
+    ///     bootstrapped.
+    /// </summary>
+    private EdgeStore? FillBowyerWatsonEnvelope(double x, double y, List<int> eList)
+    {
+        // In the logic below, we access the vertex x and y coordinates via the
+        // store's coordinate mirrors; z values are read through GetZ() by the
+        // callers. Some vertices may actually be VertexMergerGroup instances.
+        eList.Clear();
 
-            // This would happen only if the TIN were not bootstrapped
-            return eList;
+        if (!_tin.IsBootstrapped()) return null;
+
+        var locatorEdge = GetNeighborEdgeHandle(x, y, out var s);
 
         var e = locatorEdge;
-        var f = e.GetForward();
-        var r = e.GetReverse();
+        var f = s.Forward(e);
+        var r = s.Reverse(e);
 
-        var v0 = e.GetA();
-        var v1 = e.GetB();
-        var v2 = f.GetB();
+        var v0x = s.Ax(e);
+        var v0y = s.Ay(e);
+        var v1x = s.Ax(e ^ 1);
+        var v1y = s.Ay(e ^ 1);
+        var v2x = s.Ax(f ^ 1);
+        var v2y = s.Ay(f ^ 1);
 
         double h;
 
@@ -242,45 +301,45 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
         // the edge v0, v1 will be the perimeter edge and v2 will
         // be the ghost vertex (e.g. a null). In either case, v2 will
         // not be defined. So, if v2 is null, the NNI interpolation is not defined.
-        if (v2.IsNullVertex()) return eList; // empty list, NNI undefined.
+        if (double.IsNaN(v2x)) return s; // empty list, NNI undefined.
 
-        if (v0.GetDistanceSq(x, y) < _vertexTolerance2)
+        if ((x - v0x) * (x - v0x) + (y - v0y) * (y - v0y) < _vertexTolerance2)
         {
             eList.Add(e);
-            return eList; // edge starting with v0
+            return s; // edge starting with v0
         }
 
-        if (v1.GetDistanceSq(x, y) < _vertexTolerance2)
+        if ((x - v1x) * (x - v1x) + (y - v1y) * (y - v1y) < _vertexTolerance2)
         {
             eList.Add(f);
-            return eList; // edge starting with v1
+            return s; // edge starting with v1
         }
 
-        if (v2.GetDistanceSq(x, y) < _vertexTolerance2)
+        if ((x - v2x) * (x - v2x) + (y - v2y) * (y - v2y) < _vertexTolerance2)
         {
             eList.Add(r);
-            return eList; // edge starting with v2
+            return s; // edge starting with v2
         }
 
-        if (e.IsConstrained())
+        if (s.ConstraintBits(e) < 0)
         {
-            h = _geoOp.HalfPlane(v0.X, v0.Y, v1.X, v1.Y, x, y);
+            h = _geoOp.HalfPlane(v0x, v0y, v1x, v1y, x, y);
             if (h < _halfPlaneThreshold)
 
                 // (x,y) is on the edge v0, v1)
-                return eList; // empty list, NNI undefined.
+                return s; // empty list, NNI undefined.
         }
 
-        if (f.IsConstrained())
+        if (s.ConstraintBits(f) < 0)
         {
-            h = _geoOp.HalfPlane(v1.X, v1.Y, v2.X, v2.Y, x, y);
-            if (h < _halfPlaneThreshold) return eList; // empty list, NNI undefined.
+            h = _geoOp.HalfPlane(v1x, v1y, v2x, v2y, x, y);
+            if (h < _halfPlaneThreshold) return s; // empty list, NNI undefined.
         }
 
-        if (r.IsConstrained())
+        if (s.ConstraintBits(r) < 0)
         {
-            h = _geoOp.HalfPlane(v2.X, v2.Y, v0.X, v0.Y, x, y);
-            if (h < _halfPlaneThreshold) return eList; // empty list, NNI undefined.
+            h = _geoOp.HalfPlane(v2x, v2y, v0x, v0y, x, y);
+            if (h < _halfPlaneThreshold) return s; // empty list, NNI undefined.
         }
 
         // ------------------------------------------------------
@@ -297,22 +356,22 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
         // from an inserted vertex if it were added at coordinates (x,y).
         // This array happens to describe a Thiessen Polygon around the
         // inserted vertex.
-        var stack = new Stack<IQuadEdge>();
-        IQuadEdge c, n0, n1;
+        var stack = _envelopeStackScratch;
+        stack.Clear();
 
-        c = locatorEdge;
+        var c = locatorEdge;
         while (true)
         {
-            n0 = c.GetDual();
-            n1 = n0.GetForward();
+            var n0 = c ^ 1;
+            var n1 = s.Forward(n0);
 
-            if (c.IsConstrained())
+            if (s.ConstraintBits(c) < 0)
             {
                 // The search does not extend past a constrained edge.
                 // Set h=-1 to suppress further testing and add the edge.
                 h = -1;
             }
-            else if (n1.GetB().IsNullVertex())
+            else if (s.IsNullA(n1 ^ 1))
             {
                 // The search has reached a perimeter edge
                 // just add the edge and continue.
@@ -324,14 +383,14 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
 
                 // Test for the Delaunay inCircle criterion.
                 // See notes about efficiency in the IncrementalTIN class.
-                var a11 = n0.GetA().X - x;
-                var a21 = n1.GetA().X - x;
-                var a31 = n1.GetB().X - x;
+                var a11 = s.Ax(n0) - x;
+                var a21 = s.Ax(n1) - x;
+                var a31 = s.Ax(n1 ^ 1) - x;
 
                 // Column 2
-                var a12 = n0.GetA().Y - y;
-                var a22 = n1.GetA().Y - y;
-                var a32 = n1.GetB().Y - y;
+                var a12 = s.Ay(n0) - y;
+                var a22 = s.Ay(n1) - y;
+                var a32 = s.Ay(n1 ^ 1) - y;
 
                 h = (a11 * a11 + a12 * a12) * (a21 * a32 - a31 * a22)
                     + (a21 * a21 + a22 * a22) * (a31 * a12 - a11 * a32)
@@ -341,12 +400,12 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
                 {
                     _nInCircleExtended++;
                     h = _geoOp.InCircle(
-                        n0.GetA().X,
-                        n0.GetA().Y,
-                        n1.GetA().X,
-                        n1.GetA().Y,
-                        n1.GetB().X,
-                        n1.GetB().Y,
+                        s.Ax(n0),
+                        s.Ay(n0),
+                        s.Ax(n1),
+                        s.Ay(n1),
+                        s.Ax(n1 ^ 1),
+                        s.Ay(n1 ^ 1),
                         x,
                         y);
                 }
@@ -364,15 +423,15 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
             else
             {
                 eList.Add(c);
-                c = c.GetForward();
+                c = s.Forward(c);
 
                 if (stack.Count > 0)
                 {
                     var p = stack.Peek();
-                    while (c.Equals(p))
+                    while (c == p)
                     {
                         stack.Pop();
-                        c = c.GetDual().GetForward();
+                        c = s.Forward(c ^ 1);
 
                         if (stack.Count == 0)
                             break;
@@ -381,11 +440,11 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
                     }
                 }
 
-                if (c.Equals(locatorEdge)) break;
+                if (c == locatorEdge) break;
             }
         }
 
-        return eList;
+        return s;
     }
 
     /// <summary>
@@ -407,10 +466,11 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
     /// <returns>A valid instance or null if the query point is not inside the TIN.</returns>
     public NaturalNeighborElements? GetNaturalNeighborElements(double x, double y)
     {
-        var eList = GetBowyerWatsonEnvelope(x, y);
+        var eList = new List<int>();
+        var s = FillBowyerWatsonEnvelope(x, y, eList);
 
         var nEdge = eList.Count;
-        if (nEdge == 0)
+        if (s == null || nEdge == 0)
 
             // (x,y) is outside defined area
             return null;
@@ -420,18 +480,16 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
             // (x,y) is an exact match with the one edge in the list
             return null;
 
+        if (nEdge < 3) return null;
+
         // The eList contains a series of edges defining the cavity
         // containing the polygon.
-        var w = GetSibsonCoordinates(eList, x, y);
-        if (w == null)
-
-            // The coordinate is on the perimeter, no Barycentric coordinates
-            // are available.
-            return null;
+        var w = new double[nEdge];
+        ComputeSibsonCoordinates(eList, s, x, y, w);
 
         var vArray = new IVertex[nEdge];
         var k = 0;
-        foreach (var edge in eList) vArray[k++] = edge.GetA();
+        foreach (var edge in eList) vArray[k++] = s.VertexA(edge);
 
         return new NaturalNeighborElements(x, y, w, vArray, _areaOfEmbeddedPolygon);
     }
@@ -501,33 +559,49 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
         var nEdge = polygon.Count;
         if (nEdge < 3) return [];
 
+        var s = ((QuadEdge)polygon[0]).GetStore();
+        var handles = new List<int>(nEdge);
+        foreach (var edge in polygon) handles.Add(((QuadEdge)edge).GetHandle());
+
+        var weights = new double[nEdge];
+        ComputeSibsonCoordinates(handles, s, x, y, weights);
+        return weights;
+    }
+
+    /// <summary>
+    ///     Core implementation of <see cref="GetSibsonCoordinates"/>:
+    ///     handle-native, writing into a caller-supplied buffer so the
+    ///     interpolation hot path can reuse a scratch array instead of
+    ///     allocating one per query. Requires at least three polygon edges
+    ///     and a buffer at least as long as the polygon edge count; only the
+    ///     first polygon-count elements of the buffer are written.
+    /// </summary>
+    private void ComputeSibsonCoordinates(List<int> polygon, EdgeStore s, double x, double y, double[] weights)
+    {
+        _areaOfEmbeddedPolygon = 0;
+        var nEdge = polygon.Count;
+
         // The eList contains a series of edges defining the cavity
         // containing the polygon.
-        IVertex a, b, c;
         // Use pooled Circumcircle objects to avoid allocations
         var c0 = _pooledC0;
         var c1 = _pooledC1;
         var c2 = _pooledC2;
         var c3 = _pooledC3;
-        IQuadEdge e0, e1, n, n1;
         double x0, y0, x1, y1, wThiessen, wXY, wDelta;
         double wSum = 0;
-        var weights = new double[nEdge];
 
         for (var i0 = 0; i0 < nEdge; i0++)
         {
             var i1 = (i0 + 1) % nEdge;
-            e0 = polygon[i0];
-            e1 = polygon[i1];
-            a = e0.GetA();
-            b = e1.GetA(); // same as e0.GetB();
-            c = e1.GetB();
-            var ax = a.X - x;
-            var ay = a.Y - y;
-            var bx = b.X - x;
-            var by = b.Y - y;
-            var cx = c.X - x;
-            var cy = c.Y - y;
+            var e0 = polygon[i0];
+            var e1 = polygon[i1];
+            var ax = s.Ax(e0) - x;
+            var ay = s.Ay(e0) - y;
+            var bx = s.Ax(e1) - x; // e1's A is the same as e0's B
+            var by = s.Ay(e1) - y;
+            var cx = s.Ax(e1 ^ 1) - x;
+            var cy = s.Ay(e1 ^ 1) - y;
 
             x0 = (ax + bx) / 2;
             y0 = (ay + by) / 2;
@@ -540,8 +614,8 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
             if (i0 == 0)
             {
                 _geoOp.Circumcircle(ax, ay, bx, by, 0, 0, c0);
-                var nb = e0.GetForward().GetB();
-                _geoOp.Circumcircle(ax, ay, bx, by, nb.X - x, nb.Y - y, c3);
+                var nb = s.Forward(e0) ^ 1;
+                _geoOp.Circumcircle(ax, ay, bx, by, s.Ax(nb) - x, s.Ay(nb) - y, c3);
             }
             else
             {
@@ -557,22 +631,19 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
 
             // Compute the full "component area" of the Theissen polygon
             // constructed around point B, the second point of edge[i0]
-            n = e0.GetForward();
+            var n = s.Forward(e0);
             wThiessen = x0 * c3.GetY() - c3.GetX() * y0;
-            while (!n.Equals(e1))
+            while (n != e1)
             {
-                n1 = n.GetDual();
-                n = n1.GetForward();
+                var n1 = n ^ 1;
+                n = s.Forward(n1);
                 c2.Copy(c3);
-                a = n1.GetA();
-                b = n.GetA(); // same as n1.GetB();
-                c = n.GetB();
-                ax = a.X - x;
-                ay = a.Y - y;
-                bx = b.X - x;
-                by = b.Y - y;
-                cx = c.X - x;
-                cy = c.Y - y;
+                ax = s.Ax(n1) - x;
+                ay = s.Ay(n1) - y;
+                bx = s.Ax(n) - x; // n's A is the same as n1's B
+                by = s.Ay(n) - y;
+                cx = s.Ax(n ^ 1) - x;
+                cy = s.Ay(n ^ 1) - y;
                 _geoOp.Circumcircle(ax, ay, bx, by, cx, cy, c3);
                 wThiessen += c2.GetX() * c3.GetY() - c3.GetX() * c2.GetY();
             }
@@ -594,8 +665,9 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
             weights[i1] = wDelta;
         }
 
-        // Normalize the weights
-        for (var i = 0; i < weights.Length; i++) weights[i] /= wSum;
+        // Normalize the weights (only the first nEdge elements are in use — the
+        // buffer may be an oversized scratch array)
+        for (var i = 0; i < nEdge; i++) weights[i] /= wSum;
 
         _areaOfEmbeddedPolygon = wSum / 2;
 
@@ -604,17 +676,14 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
         double xSum = 0;
         double ySum = 0;
         var k = 0;
-        foreach (var s in polygon)
+        foreach (var edge in polygon)
         {
-            var v = s.GetA();
-            xSum += weights[k] * (v.X - x);
-            ySum += weights[k] * (v.Y - y);
+            xSum += weights[k] * (s.Ax(edge) - x);
+            ySum += weights[k] * (s.Ay(edge) - y);
             k++;
         }
 
         _barycentricCoordinateDeviation = Math.Sqrt(xSum * xSum + ySum * ySum);
-
-        return weights;
     }
 
     /// <summary>
@@ -665,31 +734,40 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
     public double Interpolate(double x, double y, IVertexValuator? valuator)
     {
         var vq = valuator ?? _defaultValuator;
-        var locatorEdge = _navigator.GetNeighborEdge(x, y);
+        var locatorEdge = GetNeighborEdgeHandle(x, y, out var s);
 
         // Check MaxInterpolationDistance if set
         if (_maxInterpolationDistance.HasValue)
         {
-            var v0 = locatorEdge.GetA();
-            var v1 = locatorEdge.GetB();
-            var v2 = locatorEdge.GetForward().GetB();
-            var d0 = v0.GetDistanceSq(x, y);
-            var d1 = v1.GetDistanceSq(x, y);
-            var d2 = v2.IsNullVertex() ? double.MaxValue : v2.GetDistanceSq(x, y);
+            var d0x = x - s.Ax(locatorEdge);
+            var d0y = y - s.Ay(locatorEdge);
+            var d1x = x - s.Ax(locatorEdge ^ 1);
+            var d1y = y - s.Ay(locatorEdge ^ 1);
+            var v2h = s.Forward(locatorEdge) ^ 1;
+            var d2x = x - s.Ax(v2h);
+            var d2y = y - s.Ay(v2h);
+            var d0 = d0x * d0x + d0y * d0y;
+            var d1 = d1x * d1x + d1y * d1y;
+            var d2 = double.IsNaN(d2x) ? double.MaxValue : d2x * d2x + d2y * d2y;
             var minDistSq = Math.Min(d0, Math.Min(d1, d2));
             if (minDistSq > _maxInterpolationDistance2)
                 return double.NaN;
         }
 
         if (ConstrainedRegionsOnly)
-
+        {
             // Only interpolate if at least one edge of the triangle is interior to a constrained region
-            if (!locatorEdge.IsConstraintRegionMember() || (!locatorEdge.IsConstraintRegionInterior()
-                                                            && !locatorEdge.GetForward().IsConstraintRegionInterior()
-                                                            && !locatorEdge.GetReverse().IsConstraintRegionInterior()))
+            var bits = s.ConstraintBits(locatorEdge);
+            if ((bits & QuadEdgeConstants.ConstraintRegionMemberFlags) == 0
+                || (((bits
+                      | s.ConstraintBits(s.Forward(locatorEdge))
+                      | s.ConstraintBits(s.Reverse(locatorEdge)))
+                     & QuadEdgeConstants.ConstraintRegionInteriorFlag) == 0))
                 return double.NaN;
+        }
 
-        var eList = GetBowyerWatsonEnvelope(x, y);
+        var eList = _envelopeScratch;
+        FillBowyerWatsonEnvelope(x, y, eList);
         var nEdge = eList.Count;
         if (nEdge == 0)
 
@@ -699,31 +777,34 @@ public class NaturalNeighborInterpolator : IInterpolatorOverTin
         if (nEdge == 1)
         {
             // (x,y) is an exact match with the one edge in the list
-            var e = eList[0];
-            var v = e.GetA();
+            var v = s.VertexA(eList[0]);
             return vq.Value(v);
         }
+
+        if (nEdge < 3)
+
+            // Degenerate envelope: Sibson coordinates are undefined.
+            return double.NaN;
 
         _sumN++;
         _sumSides += eList.Count;
 
-        // The eList contains a series of edges defining the cavity
-        // containing the polygon.
-        var w = GetSibsonCoordinates(eList, x, y);
-        if (w == null)
-
-            // The coordinate is on the perimeter, no Barycentric coordinates
-            // are available.
-            return double.NaN;
+        // The eList contains a series of edges defining the cavity containing the
+        // polygon. The weights are computed into a reusable scratch buffer; only the
+        // first nEdge elements are valid.
+        if (_weightsScratch.Length < nEdge)
+            _weightsScratch = new double[Math.Max(nEdge * 2, 32)];
+        ComputeSibsonCoordinates(eList, s, x, y, _weightsScratch);
+        var w = _weightsScratch;
 
         double zSum = 0;
         double wSum = 0;
         var k = 0;
-        foreach (var s in eList)
+        foreach (var edge in eList)
         {
-            var v = s.GetA();
+            var v = s.VertexA(edge);
             var z = vq.Value(v);
-            
+
             // If the vertex has a NaN Z value (e.g. a constraint vertex with no elevation),
             // we skip it in the weighted sum. This effectively treats it as "missing data"
             // and interpolates from the remaining valid neighbors.

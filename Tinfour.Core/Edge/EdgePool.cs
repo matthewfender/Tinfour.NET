@@ -21,15 +21,16 @@
  * Date     Name         Description
  * ------   ---------    -------------------------------------------------
  * 06/2015  G. Lucas     Adapted from ProtoTIN implementation of TriangleManager
- * 08/2025 M.Fender     Ported to C#
+ * 08/2025  M. Fender    Ported to C#
+ * 07/2026  M. Fender    Rebuilt as a facade over the SoA EdgeStore (#832)
  *
  * Notes:
- * The memory in this container is organized into pages, each page
- * holding a fixed number of Edges. Some edges are committed to the TIN,
- * others are in an "available state". The pages include links so that the
- * container can maintain a single-direction linked list of pages which have
- * at least one QuadEdge in the "available" state.
- *
+ * The pool's public surface is retained, but storage is now the int-handle
+ * structure-of-arrays EdgeStore rather than pages of QuadEdge objects.
+ * Handles are stable for the lifetime of an allocation (free-list reuse,
+ * no swap-compaction), so edge indices no longer change on deallocation of
+ * other edges. Page-related accessors report synthetic values derived from
+ * store capacity.
  * -----------------------------------------------------------------------
  */
 
@@ -41,88 +42,37 @@ using System.Diagnostics;
 using Tinfour.Core.Common;
 
 /// <summary>
-///     Provides an object-pool implementation that manages the allocation,
-///     deletion, and reuse of QuadEdges for efficient memory management.
+///     Manages the allocation, deletion, and reuse of edges for a TIN,
+///     backed by the int-handle structure-of-arrays EdgeStore.
 /// </summary>
 /// <remarks>
-///     This class uses a very old-school approach to minimize the frequency
-///     with which objects are garbage collected. Edges are extensively allocated
-///     and freed as the TIN is built. This design provides better performance
-///     than simple construction and disposal patterns.
-///     <strong>Note:</strong> This class is not thread-safe.
+///     <strong>Note:</strong> This class is not thread-safe for mutation.
 /// </remarks>
 public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
 {
     /// <summary>
-    ///     The number of edges in an edge-pool page.
+    ///     The nominal number of edges in a reporting "page" (retained for
+    ///     compatibility with the page-based pool's diagnostics).
     /// </summary>
-    private const int EdgePoolPageSize = 1024;
+    private const int NominalPageSize = 1024;
 
     /// <summary>
     ///     Maps constraint indices to constraint objects for linear constraints.
     /// </summary>
-    private readonly Dictionary<int, IConstraint> _linearConstraintMap;
+    private readonly Dictionary<int, IConstraint> _linearConstraintMap = new();
 
-    /// <summary>
-    ///     The number of edges stored in a page.
-    /// </summary>
-    private readonly int _pageSize;
+    private readonly EdgeStore _store = new();
 
-    /// <summary>
-    ///     The number of edge indices for a page (pageSize * 2).
-    /// </summary>
-    private readonly int _pageSize2;
-
-    /// <summary>
-    ///     Indicates whether this instance has been disposed.
-    /// </summary>
     private bool _isDisposed;
 
-    /// <summary>
-    ///     Number of edges currently allocated.
-    /// </summary>
-    private int _nAllocated;
-
-    /// <summary>
-    ///     Total number of allocation operations performed.
-    /// </summary>
     private int _nAllocationOperations;
 
-    /// <summary>
-    ///     The next page that includes available edges. This reference is never
-    ///     null as there is always at least one page with at least one free edge.
-    /// </summary>
-    private EdgePage? _nextAvailablePage;
-
-    /// <summary>
-    ///     Number of edges currently free.
-    /// </summary>
-    private int _nFree;
-
-    /// <summary>
-    ///     Total number of free operations performed.
-    /// </summary>
     private int _nFreeOperations;
 
     /// <summary>
-    ///     Array of pages containing edge objects.
+    ///     Gets the structure-of-arrays store backing this pool.
     /// </summary>
-    private EdgePage[] _pages;
-
-    /// <summary>
-    ///     Initializes a new instance of the EdgePool class.
-    /// </summary>
-    public EdgePool()
-    {
-        _pageSize = EdgePoolPageSize;
-        _pageSize2 = EdgePoolPageSize * 2;
-        _pages = new EdgePage[1];
-        _pages[0] = new EdgePage(0, _pageSize, _pageSize2);
-        _nextAvailablePage = _pages[0];
-        _nextAvailablePage.InitializeEdges();
-        _nFree = _pageSize;
-        _linearConstraintMap = new Dictionary<int, IConstraint>();
-    }
+    internal EdgeStore Store => _store;
 
     /// <summary>
     ///     Adds the specified constraint to the linear constraint map.
@@ -146,21 +96,10 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
     {
         ThrowIfDisposed();
 
-        var page = _nextAvailablePage ?? throw new InvalidOperationException("No available pages");
-        var edge = page.AllocateEdge();
-
-        if (page.IsFullyAllocated())
-        {
-            _nextAvailablePage = page.NextPage;
-            if (_nextAvailablePage == null) AllocatePage();
-        }
-
-        _nFree--;
-        _nAllocated++;
+        var h = _store.AllocatePair();
         _nAllocationOperations++;
-
-        edge.SetVertices(a, b);
-        return edge;
+        _store.SetVertices(h, a, b);
+        return _store.Wrap(h);
     }
 
     /// <summary>
@@ -171,42 +110,49 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
     {
         ThrowIfDisposed();
 
-        var page = _nextAvailablePage ?? throw new InvalidOperationException("No available pages");
-        var edge = page.AllocateEdge();
-
-        if (page.IsFullyAllocated())
-        {
-            _nextAvailablePage = page.NextPage;
-            if (_nextAvailablePage == null) AllocatePage();
-        }
-
-        _nFree--;
-        _nAllocated++;
+        var h = _store.AllocatePair();
         _nAllocationOperations++;
-
-        return edge;
+        return _store.Wrap(h);
     }
 
     /// <summary>
-    ///     Deallocates all edges, returning them to the free list.
-    ///     Does not delete any existing objects.
+    ///     Allocates an edge pair with the specified vertices and returns its
+    ///     base handle. Handle-native counterpart of AllocateEdge for the hot
+    ///     build paths; skips the disposed check (internal callers only operate
+    ///     on live pools).
+    /// </summary>
+    internal int AllocateEdgeHandle(IVertex a, IVertex b)
+    {
+        var h = _store.AllocatePair();
+        _nAllocationOperations++;
+        _store.SetVertices(h, a, b);
+        return h;
+    }
+
+    /// <summary>
+    ///     Deallocates the pair containing the handle. Handle-native
+    ///     counterpart of DeallocateEdge for the hot build paths.
+    /// </summary>
+    internal void DeallocateEdgeHandle(int h)
+    {
+        var baseIndex = h & ~1;
+        _linearConstraintMap.Remove(baseIndex);
+        _linearConstraintMap.Remove(baseIndex | 1);
+        _store.DeallocatePair(baseIndex);
+        _nFreeOperations++;
+    }
+
+    /// <summary>
+    ///     Deallocates all edges, returning them to the free state.
+    ///     Does not release storage.
     /// </summary>
     public void Clear()
     {
         ThrowIfDisposed();
 
-        foreach (var page in _pages) page.Clear();
-
-        _nAllocated = 0;
-        _nFree = _pages.Length * _pageSize;
+        _store.Clear();
         _nAllocationOperations = 0;
         _nFreeOperations = 0;
-        _nextAvailablePage = _pages[0];
-
-        for (var i = 0; i < _pages.Length - 1; i++) _pages[i].NextPage = _pages[i + 1];
-
-        _pages[_pages.Length - 1].NextPage = null;
-
         _linearConstraintMap.Clear();
     }
 
@@ -219,28 +165,15 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(edge);
 
-        // Calculate page index from base edge index, following Java logic exactly
         var baseIndex = edge.GetBaseIndex();
-        var pageIndex = baseIndex / _pageSize2;
-
-        // Add bounds checking to prevent array access exceptions
-        if (pageIndex < 0 || pageIndex >= _pages.Length)
+        if (!_store.IsAllocated(baseIndex))
             throw new InvalidOperationException(
-                $"Invalid page index {pageIndex} calculated from edge index {baseIndex}. "
-                + $"Edge pool has {_pages.Length} pages, _pageSize2={_pageSize2}");
+                $"Edge with base index {baseIndex} is not allocated in this pool");
 
-        var page = _pages[pageIndex];
+        _linearConstraintMap.Remove(baseIndex);
+        _linearConstraintMap.Remove(baseIndex ^ 1);
 
-        if (page.IsFullyAllocated())
-        {
-            // Since it will no longer be fully allocated, add it to the linked list
-            page.NextPage = _nextAvailablePage;
-            _nextAvailablePage = page;
-        }
-
-        page.DeallocateEdge((QuadEdge)edge, _linearConstraintMap);
-        _nAllocated--;
-        _nFree++;
+        _store.DeallocatePair(baseIndex);
         _nFreeOperations++;
     }
 
@@ -251,14 +184,7 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
     {
         if (!_isDisposed)
         {
-            _nextAvailablePage = null;
-            if (_pages != null)
-            {
-                foreach (var page in _pages) page?.Dispose();
-
-                _pages = null!;
-            }
-
+            _store.Clear();
             _linearConstraintMap.Clear();
             _isDisposed = true;
         }
@@ -274,61 +200,71 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(edge);
 
-        var e = (QuadEdge)edge;
-        var ed = (QuadEdge)e.GetDual();
+        FlipEdgeHandle(((QuadEdge)edge).GetHandle());
+    }
+
+    /// <summary>
+    ///     Handle-native counterpart of FlipEdge for the hot build paths.
+    /// </summary>
+    internal void FlipEdgeHandle(int e)
+    {
+        var s = _store;
+        var ed = e ^ 1;
 
         // Edges around the two adjacent triangles
-        var ef = (QuadEdge)e.GetForward(); // b->c
-        var er = (QuadEdge)e.GetReverse(); // c->a
-        var edf = (QuadEdge)ed.GetForward(); // a->d
-        var edr = (QuadEdge)ed.GetReverse(); // d->b
+        var ef = s.Forward(e); // b->c
+        var er = s.Reverse(e); // c->a
+        var edf = s.Forward(ed); // a->d
+        var edr = s.Reverse(ed); // d->b
 
-        var c = ef.GetB();
-        var d = edf.GetB();
+        var c = s.VertexB(ef);
+        var d = s.VertexB(edf);
         if (c.IsNullVertex() || d.IsNullVertex())
 
             // Cannot flip if one side is ghost
             return;
 
         // Pre-conditions (DEBUG only)
-        AssertReciprocity(e);
-        AssertReciprocity(ed);
-        AssertReciprocity(ef);
-        AssertReciprocity(er);
-        AssertReciprocity(edf);
-        AssertReciprocity(edr);
+        AssertReciprocity(s, e);
+        AssertReciprocity(s, ed);
+        AssertReciprocity(s, ef);
+        AssertReciprocity(s, er);
+        AssertReciprocity(s, edf);
+        AssertReciprocity(s, edr);
 
         // Clear stale constraint region flags before vertex reassignment.
         // The edge is being flipped to a new diagonal, so its old region
         // membership (interior/border) is no longer valid.
-        e.ClearConstraintRegionFlags();
+        s.SetConstraintBits(
+            e,
+            s.ConstraintBits(e) & ~(QuadEdgeConstants.ConstraintRegionBorderFlag
+                                    | QuadEdgeConstants.ConstraintRegionInteriorFlag
+                                    | QuadEdgeConstants.ConstraintLowerIndexMask));
 
         // Reassign vertices so that e = c->d and ed = d->c
-        e.SetVertices(c, d);
-        ed.SetVertices(d, c);
+        s.SetVertices(e, c, d);
 
         // Note: The only caller is ExtendTin(), which must handle constraint flag
-        // re-assignment after the flip loop completes. ClearConstraintRegionFlags()
-        // is called above to prevent stale flags from the pre-flip topology.
+        // re-assignment after the flip loop completes.
 
         // Rewire forward cycles for the two new triangles
         // Triangle (c, d, b): e(c->d) -> edr(d->b) -> ef(b->c)
-        e.SetForward(edr);
-        edr.SetForward(ef);
-        ef.SetForward(e);
+        s.SetForward(e, edr);
+        s.SetForward(edr, ef);
+        s.SetForward(ef, e);
 
         // Triangle (d, c, a): ed(d->c) -> er(c->a) -> edf(a->d)
-        ed.SetForward(er);
-        er.SetForward(edf);
-        edf.SetForward(ed);
+        s.SetForward(ed, er);
+        s.SetForward(er, edf);
+        s.SetForward(edf, ed);
 
         // Post-conditions (DEBUG only)
-        AssertReciprocity(e);
-        AssertReciprocity(ed);
-        AssertReciprocity(ef);
-        AssertReciprocity(er);
-        AssertReciprocity(edf);
-        AssertReciprocity(edr);
+        AssertReciprocity(s, e);
+        AssertReciprocity(s, ed);
+        AssertReciprocity(s, ef);
+        AssertReciprocity(s, er);
+        AssertReciprocity(s, edf);
+        AssertReciprocity(s, edr);
     }
 
     /// <summary>
@@ -337,7 +273,7 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
     /// <returns>The edge count</returns>
     public int GetEdgeCount()
     {
-        return _nAllocated;
+        return _store.AllocatedCount;
     }
 
     /// <summary>
@@ -346,13 +282,14 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
     /// <returns>A valid, potentially empty list of edges</returns>
     public IList<IQuadEdge> GetEdges()
     {
-        var edgeList = new List<IQuadEdge>(_nAllocated);
+        var edgeList = new List<IQuadEdge>(_store.AllocatedCount);
+        if (_isDisposed) return edgeList;
 
-        if (_pages != null)
-            foreach (var page in _pages)
-                if (page != null)
-                    for (var j = 0; j < page.NAllocated; j++)
-                        edgeList.Add(page.GetEdge(j));
+        for (var pair = 0; pair < _store.PairHighWater; pair++)
+        {
+            var h = pair << 1;
+            if (_store.IsAllocated(h)) edgeList.Add(_store.Wrap(h));
+        }
 
         return edgeList;
     }
@@ -373,7 +310,7 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
     /// <returns>A valid instance of an iterator</returns>
     public IEnumerator<IQuadEdge> GetIterator(bool includeGhostEdges)
     {
-        return new EdgeIterator(_pages, includeGhostEdges);
+        return EnumerateBaseEdges(includeGhostEdges).GetEnumerator();
     }
 
     /// <summary>
@@ -398,31 +335,25 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
     /// <returns>A positive number or zero if the pool is unallocated</returns>
     public int GetMaximumAllocationIndex()
     {
-        for (var pageIndex = _pages.Length - 1; pageIndex >= 0; pageIndex--)
-        {
-            var page = _pages[pageIndex];
-            if (page.NAllocated > 0) return page.PageId * _pageSize2 + page.NAllocated * 2;
-        }
-
-        return 0;
+        return _store.PairHighWater * 2;
     }
 
     /// <summary>
-    ///     Gets the number of pages currently allocated.
+    ///     Gets the number of nominal pages spanned by the store's capacity.
     /// </summary>
     /// <returns>A value of 1 or greater</returns>
     public int GetPageCount()
     {
-        return _pages.Length;
+        return Math.Max(1, (_store.PairCapacity + NominalPageSize - 1) / NominalPageSize);
     }
 
     /// <summary>
-    ///     Gets the number of edges allocated in a page.
+    ///     Gets the nominal page size used for diagnostics.
     /// </summary>
     /// <returns>A value of 1 or greater, usually 1024</returns>
     public int GetPageSize()
     {
-        return _pageSize;
+        return NominalPageSize;
     }
 
     /// <summary>
@@ -431,13 +362,14 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
     /// <returns>For a non-empty collection, a valid QuadEdge; otherwise null</returns>
     public IQuadEdge? GetStartingEdge()
     {
-        foreach (var page in _pages)
-            if (page.NAllocated > 0)
-                for (var i = 0; i < page.NAllocated; i++)
-                {
-                    var edge = page.GetEdge(i);
-                    if (!edge.GetA().IsNullVertex() && !edge.GetB().IsNullVertex()) return edge;
-                }
+        for (var pair = 0; pair < _store.PairHighWater; pair++)
+        {
+            var h = pair << 1;
+            if (_store.IsAllocated(h)
+                && !_store.VertexA(h).IsNullVertex()
+                && !_store.VertexB(h).IsNullVertex())
+                return _store.Wrap(h);
+        }
 
         return null;
     }
@@ -448,32 +380,24 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
     /// <returns>A ghost edge if found; otherwise null</returns>
     public IQuadEdge? GetStartingGhostEdge()
     {
-        foreach (var page in _pages)
-            if (page.NAllocated > 0)
-                for (var i = 0; i < page.NAllocated; i++)
-                {
-                    var edge = page.GetEdge(i);
-                    if (edge.GetB().IsNullVertex()) return edge;
-                }
+        for (var pair = 0; pair < _store.PairHighWater; pair++)
+        {
+            var h = pair << 1;
+            if (_store.IsAllocated(h) && _store.VertexB(h).IsNullVertex()) return _store.Wrap(h);
+        }
 
         return null;
     }
 
     /// <summary>
-    ///     Synchronous version of PreAllocateEdgesAsync for compatibility.
+    ///     Ensures that at least the specified number of edges can be
+    ///     allocated without further storage growth.
     /// </summary>
     /// <param name="n">The number of edges to allocate</param>
     public void PreAllocateEdges(int n)
     {
-        if (_nFree >= n) return;
-
-        var availablePageId = _nextAvailablePage?.PageId ?? 0;
-        var edgesNeeded = n - _nFree;
-        var pagesNeeded = (edgesNeeded + _pageSize - 1) / _pageSize;
-        var oldLen = _pages.Length;
-        var nP = oldLen + pagesNeeded;
-
-        AllocatePages(oldLen, nP, availablePageId);
+        ThrowIfDisposed();
+        _store.EnsureFreeCapacity(n);
     }
 
     /// <summary>
@@ -482,7 +406,7 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
     /// <returns>An integer value of zero or more</returns>
     public int Size()
     {
-        return _nAllocated;
+        return _store.AllocatedCount;
     }
 
     /// <summary>
@@ -499,55 +423,57 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
         ArgumentNullException.ThrowIfNull(e);
         ArgumentNullException.ThrowIfNull(m);
 
-        // Get references to key edges
-        var b = (QuadEdge)e.GetBaseReference();
-        var d = (QuadEdge)e.GetDual();
-        var eR = (QuadEdge)e.GetReverse();
-        var dF = (QuadEdge)d.GetForward();
+        var s = _store;
+        var eh = e.GetHandle();
+        var b = eh & ~1; // base reference
+        var d = eh ^ 1; // dual
+        var eR = s.Reverse(eh);
+        var dF = s.Forward(d);
 
         // Save the original starting vertex
-        var a = e.GetA();
+        var a = s.VertexA(eh);
 
         // Modify original edge to start at the insertion point
-        e.SetA(m);
+        s.SetVertexA(eh, m);
 
         // Create new edge from original start to insertion point
-        var p = (QuadEdge)AllocateEdge(a, m);
-        var q = (QuadEdge)p.GetDual();
+        var p = s.AllocatePair();
+        _nAllocationOperations++;
+        s.SetVertices(p, a, m);
+        var q = p ^ 1;
 
         // Establish proper forward/reverse links
-        p.SetForward(e);
-        p.SetReverse(eR);
+        s.SetForward(p, eh);
+        s.SetReverse(p, eR);
 
-        q.SetForward(dF);
-        q.SetReverse(d);
+        s.SetForward(q, dF);
+        s.SetReverse(q, d);
 
-        eR.SetForward(p);
-        dF.SetReverse(q);
+        s.SetForward(eR, p);
+        s.SetReverse(dF, q);
 
-        p._dual._index = b._dual._index;
+        // Preserve the constraint flags of the split edge on the new edge
+        s.SetConstraintBits(p, s.ConstraintBits(b));
+
+        var pWrapped = s.Wrap(p);
 
         // Handle region border constraints if present.
-        // SplitEdge is always called with base reference, so we just need to handle that case.
-        // The copy above (p._dual._index = b._dual._index) preserves the constraint flags,
-        // but we explicitly set the border index to ensure it's correct on the new edge.
+        // The bit copy above preserves the constraint flags, but we explicitly
+        // set the border index to ensure it's correct on the new edge.
         if (e.IsConstraintRegionBorder())
         {
             var borderIdx = e.GetConstraintBorderIndex();
-            if (borderIdx >= 0)
-            {
-                p.SetConstraintBorderIndex(borderIdx);
-            }
+            if (borderIdx >= 0) pWrapped.SetConstraintBorderIndex(borderIdx);
         }
 
         // Handle line constraints if present
         if (e.IsConstraintLineMember())
         {
             if (_linearConstraintMap.TryGetValue(e.GetIndex(), out var constraint))
-                AddLinearConstraintToMap(p, constraint);
+                AddLinearConstraintToMap(pWrapped, constraint);
         }
 
-        return p;
+        return pWrapped;
     }
 
     /// <summary>
@@ -556,7 +482,7 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
     /// <returns>A string containing edge pool statistics</returns>
     public override string ToString()
     {
-        return $"nEdges={_nAllocated}, nPages={_pages?.Length ?? 0}, nFree={_nFree}";
+        return $"nEdges={_store.AllocatedCount}, nPages={GetPageCount()}, nFree={_store.FreeCapacity}";
     }
 
     /// <summary>
@@ -569,66 +495,29 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
     }
 
     [Conditional("DEBUG")]
-    private static void AssertReciprocity(QuadEdge e)
+    private static void AssertReciprocity(EdgeStore s, int h)
     {
-        // Forward/reverse must exist and be reciprocal
-        Debug.Assert(e._f != null, "Edge forward link is null");
-        Debug.Assert(e._r != null, "Edge reverse link is null");
-        if (e._f != null) Debug.Assert(e._f._r == e, "Forward.reverse does not point back to edge");
-        if (e._r != null) Debug.Assert(e._r._f == e, "Reverse.forward does not point back to edge");
-
-        // Dual should never be null
-        Debug.Assert(e._dual != null, "Dual link is null");
+        Debug.Assert(s.Forward(h) >= 0, "Edge forward link is unset");
+        Debug.Assert(s.Reverse(h) >= 0, "Edge reverse link is unset");
+        if (s.Forward(h) >= 0)
+            Debug.Assert(s.Reverse(s.Forward(h)) == h, "Forward.reverse does not point back to edge");
+        if (s.Reverse(h) >= 0)
+            Debug.Assert(s.Forward(s.Reverse(h)) == h, "Reverse.forward does not point back to edge");
     }
 
-    /// <summary>
-    ///     Allocates a single page.
-    /// </summary>
-    private void AllocatePage()
+    private IEnumerable<IQuadEdge> EnumerateBaseEdges(bool includeGhostEdges)
     {
-        var oldLength = _pages.Length;
-        var newPages = new EdgePage[oldLength + 1];
-        Array.Copy(_pages, 0, newPages, 0, _pages.Length);
-        newPages[oldLength] = new EdgePage(oldLength, _pageSize, _pageSize2);
-        newPages[oldLength].InitializeEdges();
-        _pages = newPages;
-        _nFree += _pageSize;
-        _nextAvailablePage = _pages[oldLength];
+        for (var pair = 0; pair < _store.PairHighWater; pair++)
+        {
+            var h = pair << 1;
+            if (!_store.IsAllocated(h)) continue;
 
-        for (var i = 0; i < _pages.Length - 1; i++) _pages[i].NextPage = _pages[i + 1];
-    }
+            if (!includeGhostEdges
+                && (_store.VertexA(h).IsNullVertex() || _store.VertexB(h).IsNullVertex()))
+                continue;
 
-    /// <summary>
-    ///     Allocates pages for the edge pool.
-    /// </summary>
-    private void AllocatePages(int oldLen, int nP, int availablePageId)
-    {
-        var newPages = new EdgePage[nP];
-        Array.Copy(_pages, 0, newPages, 0, oldLen);
-
-        // Initialize new pages (can be parallelized for large allocations)
-        if (nP - oldLen > 2)
-            Parallel.For(
-                oldLen,
-                nP,
-                (int i) =>
-                    {
-                        newPages[i] = new EdgePage(i, _pageSize, _pageSize2);
-                        newPages[i].InitializeEdges();
-                    });
-        else
-            for (var i = oldLen; i < nP; i++)
-            {
-                newPages[i] = new EdgePage(i, _pageSize, _pageSize2);
-                newPages[i].InitializeEdges();
-            }
-
-        // Link pages
-        for (var i = 0; i < nP - 1; i++) newPages[i].NextPage = newPages[i + 1];
-
-        _pages = newPages;
-        _nextAvailablePage = _pages[availablePageId];
-        _nFree += (nP - oldLen) * _pageSize;
+            yield return _store.Wrap(h);
+        }
     }
 
     /// <summary>
@@ -642,24 +531,22 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
     #region Serialization Support
 
     /// <summary>
-    ///     Gets all allocated edges as QuadEdge instances in allocation order (for serialization).
-    ///     Edges are returned in order of their base indices: 0, 2, 4, ...
+    ///     Gets all allocated edges as QuadEdge instances in ascending base-index
+    ///     order (for serialization).
     /// </summary>
     internal IEnumerable<QuadEdge> GetAllocatedEdgesInOrder()
     {
-        foreach (var page in _pages)
+        for (var pair = 0; pair < _store.PairHighWater; pair++)
         {
-            for (var i = 0; i < page.NAllocated; i++)
-            {
-                yield return page.GetEdge(i);
-            }
+            var h = pair << 1;
+            if (_store.IsAllocated(h)) yield return _store.Wrap(h);
         }
     }
 
     /// <summary>
     ///     Gets the number of allocated edges (for serialization).
     /// </summary>
-    internal int GetAllocatedCount() => _nAllocated;
+    internal int GetAllocatedCount() => _store.AllocatedCount;
 
     /// <summary>
     ///     Pre-allocates the specified number of edges for deserialization.
@@ -671,15 +558,10 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
     {
         ThrowIfDisposed();
 
-        // Ensure we have enough pages
-        PreAllocateEdges(count);
+        _store.EnsureFreeCapacity(count);
 
         var edges = new QuadEdge[count];
-        for (var i = 0; i < count; i++)
-        {
-            var edge = (QuadEdge)AllocateUndefinedEdge();
-            edges[i] = edge;
-        }
+        for (var i = 0; i < count; i++) edges[i] = (QuadEdge)AllocateUndefinedEdge();
 
         return edges;
     }
@@ -693,15 +575,9 @@ public class EdgePool : IEnumerable<IQuadEdge>, IDisposable
     internal QuadEdge? GetEdgeByBaseIndex(int baseIndex)
     {
         if (baseIndex < 0 || (baseIndex & 1) != 0) return null;
+        if (!_store.IsAllocated(baseIndex)) return null;
 
-        var pageIndex = baseIndex / _pageSize2;
-        var positionInPage = baseIndex % _pageSize2 / 2;
-
-        if (pageIndex >= _pages.Length) return null;
-        var page = _pages[pageIndex];
-        if (positionInPage >= page.NAllocated) return null;
-
-        return page.GetEdge(positionInPage);
+        return _store.Wrap(baseIndex);
     }
 
     /// <summary>

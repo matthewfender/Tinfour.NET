@@ -37,6 +37,7 @@ namespace Tinfour.Core.Refinement;
 using System.Runtime.CompilerServices;
 
 using Tinfour.Core.Common;
+using Tinfour.Core.Edge;
 using Tinfour.Core.Interpolation;
 using Tinfour.Core.Standard;
 
@@ -108,7 +109,12 @@ public class RuppertRefiner : IDelaunayRefiner
 
     // Bad triangle priority queue (worst first - we negate priority for min-heap)
     private readonly PriorityQueue<BadTri, double> _badTriangles;
-    private readonly HashSet<int> _inBadTriangleQueue;  // Track by edge base index for deduplication
+
+    // Deduplication by pair token (base index + recycling generation): insertions
+    // deallocate and recycle edge pairs, and a recycled pair reuses its index and
+    // canonical wrapper. Keying by bare index would let a stale queue entry block
+    // a genuinely bad triangle on the recycled pair from ever being enqueued.
+    private readonly HashSet<long> _inBadTriangleQueue;
     private bool _badTrianglesInitialized;
 
     // Encroachment queue
@@ -201,7 +207,7 @@ public class RuppertRefiner : IDelaunayRefiner
     /// <summary>
     ///     Priority queue entry for a bad triangle.
     /// </summary>
-    private readonly record struct BadTri(IQuadEdge RepEdge, double Priority);
+    private readonly record struct BadTri(IQuadEdge RepEdge, double Priority, long PairToken);
 
     #endregion
 
@@ -351,7 +357,7 @@ public class RuppertRefiner : IDelaunayRefiner
         _cornerInfo = new Dictionary<IVertex, CornerInfo>(ReferenceEqualityComparer.Instance);
         _constrainedSegments = new HashSet<IQuadEdge>(ReferenceEqualityComparer.Instance);
         _badTriangles = new PriorityQueue<BadTri, double>();
-        _inBadTriangleQueue = new HashSet<int>();
+        _inBadTriangleQueue = new HashSet<long>();
         _encroachedSegmentQueue = new Queue<IQuadEdge>();
         _inEncroachmentQueue = new HashSet<IQuadEdge>(ReferenceEqualityComparer.Instance);
 
@@ -513,9 +519,9 @@ public class RuppertRefiner : IDelaunayRefiner
     /// </summary>
     private void EnqueueBadTriangle(IQuadEdge repEdge, double priority)
     {
-        var baseIdx = repEdge.GetBaseIndex();
-        if (_inBadTriangleQueue.Add(baseIdx))
-            _badTriangles.Enqueue(new BadTri(repEdge, priority), -priority);
+        var token = ((QuadEdge)repEdge).GetPairToken();
+        if (_inBadTriangleQueue.Add(token))
+            _badTriangles.Enqueue(new BadTri(repEdge, priority, token), -priority);
     }
 
     private Dictionary<IVertex, CornerInfo> BuildCornerInfo()
@@ -1108,7 +1114,14 @@ public class RuppertRefiner : IDelaunayRefiner
             var rep = bt.RepEdge;
 
             // Remove from deduplication set
-            _inBadTriangleQueue.Remove(rep.GetBaseIndex());
+            _inBadTriangleQueue.Remove(bt.PairToken);
+
+            // If the pair was deallocated (and possibly recycled) since this
+            // entry was enqueued, the entry refers to a dead incarnation of
+            // the edge; skip it. The pair's current occupant was (or will be)
+            // enqueued under its own token.
+            if (((QuadEdge)rep).GetPairToken() != bt.PairToken)
+                continue;
 
             var p = TriangleBadPriorityFromEdge(rep);
             if (p > 0.0)

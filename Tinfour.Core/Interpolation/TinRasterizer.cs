@@ -293,75 +293,96 @@ public class TinRasterizer
             _ => throw new ArgumentOutOfRangeException(nameof(dataType), dataType, "Unknown raster data type")
         };
 
+        return CreateRaster(rasterData, areaBounds, cancellationToken);
+    }
+
+    /// <summary>
+    ///     Creates a raster by interpolating directly into a caller-provided data sink.
+    /// </summary>
+    /// <param name="rasterData">
+    ///     The storage the interpolated values are written into. Its Width and Height
+    ///     determine the raster dimensions. Callers can supply their own implementation
+    ///     to avoid a library-side grid allocation and a subsequent copy (e.g. writing
+    ///     straight into an application buffer, applying an orientation or sign transform
+    ///     at write time).
+    /// </param>
+    /// <param name="bounds">The bounds of the area to rasterize.</param>
+    /// <param name="cancellationToken">Optional token to cancel the operation.</param>
+    /// <returns>A RasterResult wrapping the supplied sink and associated metadata.</returns>
+    /// <exception cref="InvalidOperationException">Thrown if the TIN is not bootstrapped.</exception>
+    public RasterResult CreateRaster(
+        IRasterData rasterData,
+        (double Left, double Top, double Width, double Height) bounds,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(rasterData);
+
+        if (!_tin.IsBootstrapped()) throw new InvalidOperationException("TIN is not bootstrapped");
+
+        var calculatedWidth = rasterData.Width;
+        var calculatedHeight = rasterData.Height;
+
         // Calculate cell size
-        var cellWidth = areaBounds.Width / calculatedWidth;
-        var cellHeight = areaBounds.Height / calculatedHeight;
+        var cellWidth = bounds.Width / calculatedWidth;
+        var cellHeight = bounds.Height / calculatedHeight;
 
-        // If constrained regions only, prepare for constraint checking
-        var hasConstrainedRegions = false;
-        if (_constrainedRegionsOnly)
-            hasConstrainedRegions = _tin.GetConstraints().Any((IConstraint c) => c.DefinesConstrainedRegion());
-
-        // Determine thread count (one per processor core)
-        var processorCount = Environment.ProcessorCount;
-
-        // Use ThreadLocal for interpolator instances
-        var threadLocalInterpolator = new ThreadLocal<IInterpolatorOverTin>(() =>
+        // Use ThreadLocal for interpolator instances (one per worker thread — instances
+        // are non-reentrant because they reuse per-instance scratch buffers).
+        using var threadLocalInterpolator = new ThreadLocal<IInterpolatorOverTin>(() =>
             _interpolatorOptions != null
                 ? InterpolatorFactory.Create(_tin, _interpolationType, _interpolatorOptions)
                 : InterpolatorFactory.Create(_tin, _interpolationType, _constrainedRegionsOnly));
 
-        // Thread-local no-data counters
-        var threadNoDataCounts = new int[processorCount];
+        // Process the grid in parallel at row granularity (830). The previous static
+        // ProcessorCount bands load-imbalanced badly when whole bands were cheap all-NaN
+        // regions: those threads finished early and idled while data-dense bands ground on.
+        // The default range partitioner hands out contiguous row chunks dynamically (work
+        // stealing), which keeps the TIN-walk locality of banding without the imbalance.
+        var totalNoDataCount = 0;
 
-        // Calculate rows per thread
-        var rowsPerThread = calculatedHeight / processorCount;
-
-        // Process the grid in parallel, with each thread handling contiguous rows
         Parallel.For(
             0,
-            processorCount,
-            (int threadIndex) =>
+            calculatedHeight,
+            new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount },
+            () => 0,
+            (y, _, noDataCount) =>
+            {
+                if (cancellationToken.IsCancellationRequested)
+                    return noDataCount;
+
+                var interpolator = threadLocalInterpolator.Value!;
+
+                // Reset the interpolator's walk state (search-start edge + stochastic
+                // seed) at the start of every row: interpolated values can differ at the
+                // last ulp depending on which triangle edge the walk arrives through, so
+                // without the reset the output would depend on which rows a thread
+                // happened to process before this one. With it, each row's values are a
+                // pure function of the row — bit-identical across thread schedules AND
+                // core counts (the previous static banding was only stable for a fixed
+                // ProcessorCount). Costs one cold walk per row; in-row locality remains.
+                interpolator.ResetForChangeToTin();
+
+                for (var x = 0; x < calculatedWidth; x++)
                 {
-                    if (cancellationToken.IsCancellationRequested)
-                        return;
+                    var worldX = bounds.Left + (x + 0.5) * cellWidth;
+                    var worldY = bounds.Top + (y + 0.5) * cellHeight;
 
-                    var startRow = threadIndex * rowsPerThread;
-                    var endRow = threadIndex == processorCount - 1 ? calculatedHeight : startRow + rowsPerThread;
+                    var value = interpolator.Interpolate(worldX, worldY, _valuator);
+                    rasterData.SetValue(x, y, value);
 
-                    var interpolator = threadLocalInterpolator.Value!;
-                    var noDataCount = 0;
+                    if (double.IsNaN(value)) noDataCount++;
+                }
 
-                    for (var y = startRow; y < endRow; y++)
-                    {
-                        if (cancellationToken.IsCancellationRequested)
-                            break;
-
-                        for (var x = 0; x < calculatedWidth; x++)
-                        {
-                            var worldX = areaBounds.Left + (x + 0.5) * cellWidth;
-                            var worldY = areaBounds.Top + (y + 0.5) * cellHeight;
-
-                            var value = interpolator.Interpolate(worldX, worldY, _valuator);
-                            rasterData.SetValue(x, y, value);
-
-                            if (double.IsNaN(value)) noDataCount++;
-                        }
-                    }
-
-                    threadNoDataCounts[threadIndex] = noDataCount;
-                });
-
-        // Sum up the no-data counts from all threads
-        var totalNoDataCount = 0;
-        for (var i = 0; i < processorCount; i++) totalNoDataCount += threadNoDataCounts[i];
+                return noDataCount;
+            },
+            noDataCount => Interlocked.Add(ref totalNoDataCount, noDataCount));
 
         // If cancelled, throw cancellation exception
         cancellationToken.ThrowIfCancellationRequested();
 
         return new RasterResult(
             rasterData,
-            areaBounds,
+            bounds,
             cellWidth,
             cellHeight,
             totalNoDataCount);

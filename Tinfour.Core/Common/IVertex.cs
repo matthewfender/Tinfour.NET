@@ -18,8 +18,9 @@ namespace Tinfour.Core.Common;
 
 /// <summary>
 ///     Defines the interface for vertex-like objects in the triangulation.
-///     This allows for both value-type Vertex structs and reference-type VertexMergerGroup classes
-///     to be used polymorphically while maintaining memory efficiency.
+///     Implementations (Vertex, VertexMergerGroup, PerimeterVertex) are reference
+///     types by design: the triangulation relies on shared-instance identity
+///     (the same instance is reachable from every edge that touches a vertex).
 /// </summary>
 public interface IVertex : ISamplePoint
 {
@@ -38,13 +39,6 @@ public interface IVertex : ISamplePoint
     ///     Gets the y coordinate of the vertex.
     /// </summary>
     double Y { get; }
-
-    /// <summary>
-    ///     Gets this vertex as a Vertex struct for computational operations.
-    ///     For merger groups, this returns the representative vertex.
-    /// </summary>
-    /// <returns>A Vertex struct representing this vertex</returns>
-    Vertex AsVertex();
 
     /// <summary>
     ///     Tests if this vertex contains the specified vertex.

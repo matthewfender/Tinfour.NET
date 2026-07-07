@@ -53,14 +53,16 @@ public class EdgeConstraintDelegationDebugTest
         // _output.WriteLine($"Base IsConstrained: {edge1.IsConstrained()}");
         // _output.WriteLine($"Dual IsConstrained: {edge1.GetDual().IsConstrained()}");
 
-        // Test parameterized constructor
+        // Test undefined-edge allocation (indices are pool-assigned, #832)
         this._output.WriteLine(string.Empty);
-        this._output.WriteLine("--- Parameterized Constructor (index=100) ---");
-        var edge2 = new QuadEdge(100);
+        this._output.WriteLine("--- Undefined Edge Allocation ---");
+        var pool2 = new EdgePool();
+        var edge2 = pool2.AllocateUndefinedEdge();
         this._output.WriteLine($"Base edge index: {edge2.GetIndex()}");
         this._output.WriteLine($"Dual edge index: {edge2.GetDual().GetIndex()}");
         this._output.WriteLine($"Base IsConstrained: {edge2.IsConstrained()}");
         this._output.WriteLine($"Dual IsConstrained: {edge2.GetDual().IsConstrained()}");
+        pool2.Dispose();
 
         // Test edge pool allocation (this is what actually happens during triangulation)
         this._output.WriteLine(string.Empty);

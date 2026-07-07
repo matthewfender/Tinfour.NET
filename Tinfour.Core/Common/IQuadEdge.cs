@@ -448,13 +448,6 @@ public interface IQuadEdge
     void SetForward(IQuadEdge forward);
 
     /// <summary>
-    ///     Sets the index value for this edge. This method is used primarily
-    ///     for memory management and debugging purposes.
-    /// </summary>
-    /// <param name="index">The index value to assign</param>
-    void SetIndex(int index);
-
-    /// <summary>
     ///     Sets the reverse reference for this edge and reciprocal forward reference.
     /// </summary>
     /// <param name="reverse">A valid edge reference</param>

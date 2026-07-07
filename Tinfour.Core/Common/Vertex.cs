@@ -24,9 +24,10 @@
  * 08/2025 M.Fender    Ported to C# with special null vertex handling
  *
  * Notes:
- * In Java, Vertex was a class and could be null. In C#, we use a struct
- * for memory efficiency but provide a special NullVertex constant to
- * represent null vertices (ghost vertices) in the triangulation.
+ * In Java, Vertex is a class and edge endpoints may be null. In C#, Vertex
+ * is also a class (reference identity is load-bearing for the triangulation
+ * algorithms), but instead of null endpoints a special Vertex.Null constant
+ * represents ghost vertices.
  * ----------------------------------------------------------------------- */
 
 namespace Tinfour.Core.Common;
@@ -37,12 +38,19 @@ using System.Runtime.CompilerServices;
 ///     Represents a point in a connected network on a planar surface.
 /// </summary>
 /// <remarks>
-///     TEMPORARY: Changed from struct to class to test reference equality issues.
-///     Original comment: This struct is intentionally implemented with memory efficiency in mind.
-///     Using a struct rather than a class eliminates the overhead of heap allocation,
-///     and by carefully selecting data types, we minimize the memory footprint.
-///     For compatibility with the Java version which used nullable vertices,
-///     we provide a special NullVertex constant to represent ghost vertices.
+///     <para>
+///         Vertex is deliberately a reference type. The triangulation algorithms
+///         depend on shared-instance identity: every edge that touches a vertex
+///         references the same instance, and several call sites (insert-circuit
+///         termination, Ruppert refinement) compare vertices by reference. A
+///         historical struct-based variant failed because instances boxed to
+///         IVertex per call, breaking identity — do not revive it.
+///     </para>
+///     <para>
+///         Equality (<c>==</c>/<c>Equals</c>) is value-based on X/Y only, with
+///         ghost-vertex special-casing; use <c>ReferenceEquals</c> where instance
+///         identity is intended.
+///     </para>
 /// </remarks>
 public sealed class Vertex : IVertex
 {
@@ -117,6 +125,14 @@ public sealed class Vertex : IVertex
     ///     The Z coordinate of the vertex (immutable); treated as a dependent
     ///     variable of (X,Y).
     /// </summary>
+    /// <remarks>
+    ///     Precision decision (ticket #832): Z is deliberately stored as
+    ///     <c>float</c> while X/Y are <c>double</c>. Horizontal coordinates need
+    ///     double precision for robust geometric predicates; Z is a measured
+    ///     sample value (e.g. sonar depth) whose source precision is far below
+    ///     float epsilon, and float storage halves the per-vertex Z footprint.
+    ///     All arithmetic on Z is performed in double after widening.
+    /// </remarks>
     private float _z;
 
     /// <summary>
@@ -222,16 +238,6 @@ public sealed class Vertex : IVertex
     public bool Contains(Vertex vertex)
     {
         return Equals(vertex);
-    }
-
-    /// <summary>
-    ///     Gets this vertex as a Vertex struct.
-    /// </summary>
-    /// <returns>This vertex as a Vertex struct</returns>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public Vertex AsVertex()
-    {
-        return this;
     }
 
     /// <summary>

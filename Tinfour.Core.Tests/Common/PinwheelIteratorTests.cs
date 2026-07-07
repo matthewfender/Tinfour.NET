@@ -32,9 +32,10 @@ public class PinwheelIteratorTests
         var v2 = new Vertex(0, 1, 0); // North
         var v3 = new Vertex(-1, 0, 0); // West
 
-        var e1 = new QuadEdge(10);
-        var e2 = new QuadEdge(20);
-        var e3 = new QuadEdge(30);
+        var pool = new EdgePool();
+        var e1 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e2 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e3 = (QuadEdge)pool.AllocateUndefinedEdge();
 
         e1.SetVertices(center, v1);
         e2.SetVertices(center, v2);
@@ -70,9 +71,10 @@ public class PinwheelIteratorTests
         var v2 = new Vertex(0, 1, 0); // North  
         var v3 = new Vertex(-1, 0, 0); // West
 
-        var e1 = new QuadEdge(10);
-        var e2 = new QuadEdge(20);
-        var e3 = new QuadEdge(30);
+        var pool = new EdgePool();
+        var e1 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e2 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e3 = (QuadEdge)pool.AllocateUndefinedEdge();
 
         e1.SetVertices(center, v1);
         e2.SetVertices(center, v2);
@@ -106,7 +108,8 @@ public class PinwheelIteratorTests
         var center = new Vertex(0, 0, 0);
         var v1 = new Vertex(1, 0, 0);
 
-        var e1 = new QuadEdge(10);
+        var pool = new EdgePool();
+        var e1 = (QuadEdge)pool.AllocateUndefinedEdge();
         e1.SetVertices(center, v1);
 
         var e1Dual = e1.GetDual();
@@ -129,8 +132,9 @@ public class PinwheelIteratorTests
         var v1 = new Vertex(1, 0, 0);
         var v2 = new Vertex(0, 1, 0);
 
-        var e1 = new QuadEdge(10);
-        var e2 = new QuadEdge(20);
+        var pool = new EdgePool();
+        var e1 = (QuadEdge)pool.AllocateUndefinedEdge();
+        var e2 = (QuadEdge)pool.AllocateUndefinedEdge();
 
         e1.SetVertices(center, v1);
         e2.SetVertices(center, v2);
