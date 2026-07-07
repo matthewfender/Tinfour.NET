@@ -123,7 +123,7 @@ public class VertexMergerGroup : IVertex
             // ensure that the resolution rules behave properly.
             var added = false;
             foreach (var a in group._list)
-                if (!_list.Contains(a))
+                if (!ContainsInstance(a))
                 {
                     _list.Add(a);
                     added = true;
@@ -133,45 +133,43 @@ public class VertexMergerGroup : IVertex
             return added;
         }
 
-        if (vertex is Vertex vertexStruct)
+        if (vertex is Vertex plainVertex)
         {
-            if (_list.Contains(vertexStruct)) return false;
+            if (ContainsInstance(plainVertex)) return false;
 
-            _list.Add(vertexStruct);
+            _list.Add(plainVertex);
             ApplyRule();
             return true;
         }
 
-        // For other IVertex implementations, convert to Vertex
-        var asVertex = vertex.AsVertex();
-        if (_list.Contains(asVertex)) return false;
-
-        _list.Add(asVertex);
-        ApplyRule();
-        return true;
-    }
-
-    /// <summary>
-    ///     Gets this vertex as a Vertex struct for computational operations.
-    ///     For merger groups, this returns the representative vertex.
-    /// </summary>
-    /// <returns>A Vertex struct representing this vertex</returns>
-    public Vertex AsVertex()
-    {
-        // Return the first vertex in the list as the representative
-        if (_list.Count > 0) return _list[0];
-        return Vertex.Null.AsVertex();
+        throw new ArgumentException(
+            $"Unsupported IVertex implementation: {vertex.GetType().Name}",
+            nameof(vertex));
     }
 
     /// <summary>
     ///     Tests if this vertex contains the specified vertex.
-    ///     For merger groups, this tests for membership.
+    ///     For merger groups, this tests for membership by instance identity
+    ///     (matching the Java implementation): coincident vertices are distinct
+    ///     samples at the same location, so value equality must not conflate them.
     /// </summary>
     /// <param name="vertex">The vertex to test</param>
     /// <returns>True if this vertex contains the specified vertex</returns>
     public bool Contains(Vertex vertex)
     {
-        return _list.Contains(vertex);
+        return ContainsInstance(vertex);
+    }
+
+    /// <summary>
+    ///     Tests whether the specified vertex is a member of this group.
+    ///     Only plain <see cref="Vertex" /> instances can be members; any other
+    ///     implementation (including another merger group) returns false.
+    /// </summary>
+    /// <param name="vertex">The vertex to test</param>
+    /// <returns>True if the instance is a member of this group</returns>
+    public bool Contains(IVertex vertex)
+    {
+        return vertex is Vertex v && ContainsInstance(v);
     }
 
     /// <summary>
@@ -309,9 +307,15 @@ public class VertexMergerGroup : IVertex
     /// </returns>
     public bool RemoveVertex(Vertex v)
     {
-        var removed = _list.Remove(v);
-        if (removed) ApplyRule();
-        return removed;
+        for (var i = 0; i < _list.Count; i++)
+            if (ReferenceEquals(_list[i], v))
+            {
+                _list.RemoveAt(i);
+                ApplyRule();
+                return true;
+            }
+
+        return false;
     }
 
     /// <summary>
@@ -356,6 +360,21 @@ public class VertexMergerGroup : IVertex
     public override string ToString()
     {
         return $"VertexMergerGroup({X:F1},{Y:F1}, size={_list.Count}) [{_index}]";
+    }
+
+    /// <summary>
+    ///     Tests list membership by instance identity. Vertex equality is
+    ///     value-based (X/Y), which would conflate distinct coincident samples;
+    ///     group membership must distinguish them so resolution rules see every
+    ///     contributing sample (Java parity).
+    /// </summary>
+    private bool ContainsInstance(Vertex v)
+    {
+        foreach (var m in _list)
+            if (ReferenceEquals(m, v))
+                return true;
+
+        return false;
     }
 
     /// <summary>

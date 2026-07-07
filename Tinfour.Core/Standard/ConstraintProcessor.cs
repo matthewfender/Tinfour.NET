@@ -130,7 +130,7 @@ public class ConstraintProcessor
 
         // Replace constraint vertices with TIN vertices using Java algorithm
         var a = e0.GetA();
-        if (a != v0 && a is VertexMergerGroup group && group.Contains(v0.AsVertex())) cvList[0] = a;
+        if (a != v0 && a is VertexMergerGroup group && group.Contains(v0)) cvList[0] = a;
 
         // searchEdge may be invalidated by subsequent edits
         searchEdge = null;
@@ -168,8 +168,11 @@ public class ConstraintProcessor
                 }
                 else
                 {
-                    // Check if this edge connects v0 to v1 using Java algorithm
-                    var directMatch = b.Equals(v1); // ReferenceEquals(b, v1);
+                    // Value equality (X/Y) is deliberate here: v1 is a caller-supplied
+                    // constraint vertex and may be a distinct instance from the TIN's
+                    // vertex at the same location (e.g. after pre-interpolation copies).
+                    // Instance-merged cases are handled by the merger-group branch below.
+                    var directMatch = b.Equals(v1);
                     Log($"    Testing B=({b.X},{b.Y}) vs v1=({v1.X},{v1.Y}): Equals={directMatch}");
                     //Debug.WriteLine(
                     //    $"ProcessConstraint: Testing vertex {b.GetIndex()} against target {v1.GetIndex()}: Equals = {directMatch}");
@@ -185,7 +188,7 @@ public class ConstraintProcessor
                         goto SegmentContinue; // next segment
                     }
 
-                    if (b is VertexMergerGroup bGroup && bGroup.Contains(v1.AsVertex()))
+                    if (b is VertexMergerGroup bGroup && bGroup.Contains(v1))
                     {
                         Log($"    MERGER GROUP MATCH! Marking edge {e.GetIndex()} as constrained");
                         //Debug.WriteLine(
@@ -350,7 +353,7 @@ public class ConstraintProcessor
                 {
                     if (!IsMatchingVertex(c, v1))
                     {
-                        if (c is VertexMergerGroup cGroup && cGroup.Contains(v1.AsVertex()))
+                        if (c is VertexMergerGroup cGroup && cGroup.Contains(v1))
                         {
                             cvList[iSegment + 1] = c;
                         }
@@ -391,8 +394,12 @@ public class ConstraintProcessor
                 }
             }
 
-            // Insert the constraint edge (v0,c) and wire topology
-            var nc = (QuadEdge)_edgePool.AllocateEdge(v0.AsVertex(), c.AsVertex());
+            // Insert the constraint edge (v0,c) and wire topology.
+            // Pass the instances through unmodified (Java parity): if either
+            // endpoint is a VertexMergerGroup, the edge must reference the group
+            // itself — unwrapping to a representative would break the
+            // one-canonical-instance-per-location identity invariant.
+            var nc = (QuadEdge)_edgePool.AllocateEdge(v0, c);
             SetConstrained(nc, constraint, edgesForConstraint);
             var dc = (QuadEdge)nc.GetDual();
 
@@ -633,10 +640,11 @@ public class ConstraintProcessor
             return constraintGroup;
         }
 
-        // Neither is a merger group - create new one if they're coincident
+        // Neither is a merger group - create new one if they're coincident.
+        // The merger-group checks above guarantee tinVertex is a plain Vertex here.
         if (Near(constraintVertex, tinVertex, tol))
         {
-            var newGroup = new VertexMergerGroup(tinVertex.AsVertex());
+            var newGroup = new VertexMergerGroup((Vertex)tinVertex);
             newGroup.AddVertex(constraintVertex);
             return newGroup;
         }
@@ -660,7 +668,7 @@ public class ConstraintProcessor
         }
 
         // Check for vertex merger group containment
-        if (fromTin is VertexMergerGroup group && group.Contains(v.AsVertex()))
+        if (fromTin is VertexMergerGroup group && group.Contains(v))
         {
             Debug.WriteLine($"IsMatchingVertex: VertexMergerGroup match for ({v.X},{v.Y})");
             return true;
