@@ -551,7 +551,7 @@ public class GeometricOperations
         var q11 = new DoubleDouble(cx) - new DoubleDouble(ax); // dx
         var q12 = new DoubleDouble(ay) - new DoubleDouble(by); // vy
         var q21 = new DoubleDouble(cy) - new DoubleDouble(ay); // dy
-        var q22 = new DoubleDouble(cx) - new DoubleDouble(ax); // vx
+        var q22 = new DoubleDouble(bx) - new DoubleDouble(ax); // vx
 
         // Cross product: dx*vy - dy*vx
         var result = q11 * q12 + q21 * q22;

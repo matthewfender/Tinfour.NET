@@ -27,9 +27,10 @@ public class ConvexHullConstraintOptionTests
         var tin = new IncrementalTin(nominalSpacing);
         tin.Add(vertices.Cast<IVertex>().ToList());
 
-        // Ruppert insertion counts are order-sensitive; the SoA edge store (#832)
-        // changed edge enumeration/allocation order, moving convergence for this
-        // dataset from ~4.9k to ~5.3k Steiner points. The cap guards against
+        // Ruppert insertion counts are order-sensitive (edge enumeration and
+        // allocation order feed the priority queue): ~4.9k Steiner points for
+        // this dataset with the corrected half-plane predicate, ~5.3k with the
+        // pre-fix predicate on the SoA store. The cap guards against
         // non-termination, not a specific count.
         var options = new RuppertOptions(25.0)
         {
