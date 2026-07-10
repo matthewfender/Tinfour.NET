@@ -571,6 +571,14 @@ public class IncrementalTin : IIncrementalTin
             FloodFill = phaseTimer.Elapsed,
             Total = totalTimer.Elapsed,
         };
+
+        // The interpolation surface is only consulted by RestoreConformity's
+        // constrained-edge splits (all inside this call; AddConstraints cannot
+        // be called twice — the TIN is now locked due to constraints), so
+        // release it rather than carrying it for the TIN's lifetime: the
+        // frozen sampler's arrays on the facet path, the whole retained
+        // copy-TIN on the legacy path.
+        _constraintEdgeInterpolator = null;
     }
 
     /// <summary>
