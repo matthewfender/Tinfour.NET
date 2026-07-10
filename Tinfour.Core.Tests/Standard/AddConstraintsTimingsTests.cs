@@ -6,10 +6,11 @@ using global::Tinfour.Core.Standard;
 using Xunit;
 
 /// <summary>
-///     Tests for the AddConstraints per-phase timing attribution (ticket 826) and for the
-///     Hilbert-ordered transient interpolation-TIN build it accompanies: the copy-TIN is
-///     now built in Hilbert order with preallocation, which must not change the
-///     interpolation surface.
+///     Tests for the AddConstraints per-phase timing attribution (ticket 826) and the
+///     interpolation-surface build it accompanies. Since ticket #800 the TriangularFacet
+///     path snapshots a frozen surface sampler instead of re-triangulating a copy-TIN
+///     (InterpolationTinBuild times the snapshot); the legacy Hilbert-ordered copy-TIN
+///     build remains for other interpolation types and must not change the surface.
 /// </summary>
 public class AddConstraintsTimingsTests
 {
@@ -35,8 +36,8 @@ public class AddConstraintsTimingsTests
         var timings = tin.LastAddConstraintsTimings;
         Assert.NotNull(timings);
 
-        // All-NaN constraint => no vertices seeded in phase 0, so the interpolation TIN
-        // re-triangulates exactly the original data vertices.
+        // All-NaN constraint => no vertices seeded in phase 0, so the frozen
+        // interpolation surface covers exactly the original data vertices.
         Assert.Equal(dataVertexCount, timings!.InterpolationTinVertexCount);
 
         Assert.True(timings.SeedConstraintVertices >= TimeSpan.Zero);
