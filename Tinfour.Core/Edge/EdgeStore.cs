@@ -324,6 +324,54 @@ internal sealed class EdgeStore
         SetVertexA(h ^ 1, b);
     }
 
+    // ---------- Snapshot ----------
+
+    /// <summary>
+    ///     Copies the store's current topology (forward links and A-vertex
+    ///     references) into fresh arrays for a frozen read-only snapshot
+    ///     (ticket #800). Dead pairs retain their cleared state; a walk can
+    ///     never reach them because no live edge links to them. Reverse links
+    ///     are not copied: every face of a consistent completed TIN (ghost
+    ///     faces included) is a 3-cycle, so reverse(h) == forward(forward(h))
+    ///     — asserted below in DEBUG builds.
+    /// </summary>
+    /// <param name="f">Receives a copy of the forward links per handle.</param>
+    /// <param name="v">Receives a copy of the A-vertex references per handle.</param>
+    /// <param name="firstLiveHandle">
+    ///     Receives the base handle of the lowest allocated pair (the same
+    ///     edge a fresh navigator over this store would seed its walk from),
+    ///     or <see cref="NullHandle" /> if the store is empty.
+    /// </param>
+    internal void SnapshotTopology(out int[] f, out IVertex[] v, out int firstLiveHandle)
+    {
+        var handleCount = _highWater * 2;
+        f = new int[handleCount];
+        v = new IVertex[handleCount];
+        Array.Copy(_f, f, handleCount);
+        Array.Copy(_v, v, handleCount);
+
+        firstLiveHandle = NullHandle;
+        for (var pair = 0; pair < _highWater; pair++)
+        {
+            if (_allocatedPairs[pair])
+            {
+                firstLiveHandle = pair << 1;
+                break;
+            }
+        }
+
+#if DEBUG
+        for (var pair = 0; pair < _highWater; pair++)
+        {
+            if (!_allocatedPairs[pair]) continue;
+            var h = pair << 1;
+            System.Diagnostics.Debug.Assert(
+                _f[h] >= 0 && _r[h] == _f[_f[h]] && _f[h | 1] >= 0 && _r[h | 1] == _f[_f[h | 1]],
+                "SnapshotTopology: live face is not a 3-cycle; derived reverse links would be wrong");
+        }
+#endif
+    }
+
     // ---------- Wrappers ----------
 
     /// <summary>

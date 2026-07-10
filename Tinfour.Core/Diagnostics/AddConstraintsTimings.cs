@@ -46,15 +46,21 @@ public sealed class AddConstraintsTimings
     public TimeSpan SeedConstraintVertices { get; init; }
 
     /// <summary>
-    ///     Building the transient interpolation TIN (vertex snapshot, Hilbert-ordered
-    ///     re-triangulation, interpolator and navigator construction). Zero when
-    ///     pre-interpolation is disabled.
+    ///     Building the frozen interpolation surface. For TriangularFacet (the
+    ///     default) this is a frozen array snapshot of the primary edge store
+    ///     (ticket #800); for other interpolation types it is the legacy
+    ///     transient interpolation TIN (vertex snapshot, Hilbert-ordered
+    ///     re-triangulation, interpolator and navigator construction). Zero
+    ///     when pre-interpolation is disabled.
     /// </summary>
     public TimeSpan InterpolationTinBuild { get; init; }
 
     /// <summary>
-    ///     Number of vertices re-triangulated into the transient interpolation TIN.
-    ///     Zero when pre-interpolation is disabled.
+    ///     Number of vertices covered by the interpolation surface. On the
+    ///     frozen-sampler path this is the TIN's raw inserted-vertex count
+    ///     (coincident vertices merged into a group are counted individually);
+    ///     on the legacy copy-TIN path it is the distinct-vertex count that was
+    ///     re-triangulated. Zero when pre-interpolation is disabled.
     /// </summary>
     public int InterpolationTinVertexCount { get; init; }
 

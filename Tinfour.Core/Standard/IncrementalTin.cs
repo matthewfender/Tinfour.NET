@@ -358,33 +358,51 @@ public class IncrementalTin : IIncrementalTin
         var linearConstraints = new List<IConstraint>();
 
         // Setup interpolator if needed for pre-interpolation and constraint edge splits.
-        // IMPORTANT: We build the interpolator on a COPY of the current TIN (which now includes
-        // real-Z constraint vertices). This is necessary because subsequent constraint processing
-        // will modify the TIN topology (tunneling, edge removal, etc.), which would invalidate
-        // an interpolator built directly on `this`. The copy preserves the original triangulation
-        // structure for accurate interpolation during RestoreConformity edge splits.
+        // The interpolation surface must be the PRE-MUTATION triangulation (which now
+        // includes real-Z constraint vertices): subsequent constraint processing modifies
+        // the TIN topology (tunneling, edge removal, etc.), which would invalidate an
+        // interpolator built directly on `this`.
         IInterpolatorOverTin? interpolator = null;
-        // Navigator over the same interpolation TIN, used to extrapolate a Z for constraint
-        // vertices that fall OUTSIDE the data convex hull (where facet interpolation returns NaN).
+        // Frozen snapshot of the current edge-store topology (ticket #800): identical
+        // handles, triangles, and coordinates to the pre-mutation TIN at ~72 B/vertex,
+        // built with two array copies instead of re-triangulating every vertex.
+        FrozenSurfaceSampler? sampler = null;
+        // Legacy copy-TIN path (non-facet interpolation types only): a full second TIN
+        // rebuilt from GetVertices(), with a navigator used to extrapolate a Z for
+        // constraint vertices that fall OUTSIDE the data convex hull.
         IIncrementalTinNavigator? interpolationNavigator = null;
         if (preInterpolateZ)
         {
             phaseTimer.Restart();
 
-            // GetVertices() snapshots via a HashSet, so the list arrives in effectively
-            // random order; an unsorted incremental insertion walk degrades to ~O(n^1.5).
-            // Hilbert ordering + edge-pool preallocation keep this transient rebuild
-            // O(n)-amortized like a caller's sorted primary build. The resulting surface
-            // is the same: identical vertex set, and Delaunay triangulations are unique
-            // for points in general position regardless of insertion order.
-            var originalVertices = GetVertices();
-            interpolationTinVertexCount = originalVertices.Count;
-            var interpolationTin = new IncrementalTin(_nominalPointSpacing);
-            interpolationTin.PreAllocateForVertices(originalVertices.Count);
-            interpolationTin.Add(originalVertices, VertexOrder.Hilbert);
+            if (interpolationType == InterpolationType.TriangularFacet)
+            {
+                sampler = CreateFrozenSurfaceSampler();
+                interpolator = sampler;
 
-            interpolator = InterpolatorFactory.Create(interpolationTin, interpolationType);
-            interpolationNavigator = interpolationTin.GetNavigator();
+                // Raw inserted-vertex count; unlike the legacy GetVertices() distinct
+                // count, coincident vertices merged into a group are counted
+                // individually. Diagnostic only.
+                interpolationTinVertexCount = _vertexCount;
+            }
+            else
+            {
+                // GetVertices() snapshots via a HashSet, so the list arrives in effectively
+                // random order; an unsorted incremental insertion walk degrades to ~O(n^1.5).
+                // Hilbert ordering + edge-pool preallocation keep this transient rebuild
+                // O(n)-amortized like a caller's sorted primary build. The resulting surface
+                // is the same: identical vertex set, and Delaunay triangulations are unique
+                // for points in general position regardless of insertion order.
+                var originalVertices = GetVertices();
+                interpolationTinVertexCount = originalVertices.Count;
+                var interpolationTin = new IncrementalTin(_nominalPointSpacing);
+                interpolationTin.PreAllocateForVertices(originalVertices.Count);
+                interpolationTin.Add(originalVertices, VertexOrder.Hilbert);
+
+                interpolator = InterpolatorFactory.Create(interpolationTin, interpolationType);
+                interpolationNavigator = interpolationTin.GetNavigator();
+            }
+
             // Retained for draping the Z of no-depth constraint-edge splits during
             // conformity restoration (depth-bearing constraints split linearly instead).
             _constraintEdgeInterpolator = interpolator;
@@ -427,7 +445,9 @@ public class IncrementalTin : IIncrementalTin
                             // and mesh construction skips every triangle touching it).
                             if (double.IsNaN(z))
                             {
-                                var nearest = interpolationNavigator?.GetNearestVertex(v.X, v.Y);
+                                var nearest = sampler != null
+                                    ? sampler.GetNearestVertex(v.X, v.Y)
+                                    : interpolationNavigator?.GetNearestVertex(v.X, v.Y);
                                 if (nearest != null && !double.IsNaN(nearest.GetZ()))
                                     z = nearest.GetZ();
                             }
@@ -551,6 +571,17 @@ public class IncrementalTin : IIncrementalTin
             FloodFill = phaseTimer.Elapsed,
             Total = totalTimer.Elapsed,
         };
+    }
+
+    /// <summary>
+    ///     Takes a frozen snapshot of the TIN's current surface for
+    ///     constraint-Z draping (ticket #800). The snapshot is unaffected by
+    ///     subsequent mutation of this TIN. Internal so tests can compare the
+    ///     sampler against the legacy copy-TIN interpolation path.
+    /// </summary>
+    internal FrozenSurfaceSampler CreateFrozenSurfaceSampler()
+    {
+        return FrozenSurfaceSampler.Snapshot(_edgePool.Store, _thresholds, IsBootstrapped());
     }
 
     /// <summary>
