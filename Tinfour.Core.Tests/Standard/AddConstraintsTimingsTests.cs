@@ -58,6 +58,59 @@ public class AddConstraintsTimingsTests
     }
 
     [Fact]
+    public void AddConstraints_AllDepthBearingConstraints_SkipsInterpolationSurface()
+    {
+        // #800 lazy-build guard: with no NaN and no pre-flagged constraint vertices,
+        // draping can never be requested (splits stay linear), so the interpolation
+        // surface must not be built even though pre-interpolation is enabled.
+        using var tin = BuildGridTin();
+
+        tin.AddConstraints(
+            new List<IConstraint> { CreateRealZSquareConstraint() },
+            restoreConformity: true,
+            preInterpolateZ: true,
+            InterpolationType.TriangularFacet);
+
+        var timings = tin.LastAddConstraintsTimings;
+        Assert.NotNull(timings);
+        Assert.Equal(TimeSpan.Zero, timings!.InterpolationTinBuild);
+        Assert.Equal(0, timings.InterpolationTinVertexCount);
+
+        // The depth-bearing vertices keep their defining Z and are not flagged.
+        foreach (var v in tin.GetVertices().OfType<Vertex>().Where(v => v.GetZ() == 1.0))
+            Assert.False(v.HasInterpolatedZ(), "depth-bearing constraint vertices must not be flagged");
+    }
+
+    [Fact]
+    public void AddConstraints_PreFlaggedConstraintVertex_BuildsInterpolationSurface()
+    {
+        // A caller-supplied vertex already flagged interpolated-Z requests draping for
+        // its conformity splits even though its Z is real, so the surface must be built.
+        using var tin = BuildGridTin(out var dataVertexCount);
+
+        var flagged = new PolygonConstraint(new List<IVertex>
+        {
+            new Vertex(22.2, 22.2, 1.0, 3001).WithInterpolatedZ(true),
+            new Vertex(77.7, 22.2, 1.0, 3002),
+            new Vertex(77.7, 77.7, 1.0, 3003),
+            new Vertex(22.2, 77.7, 1.0, 3004),
+        });
+
+        tin.AddConstraints(
+            new List<IConstraint> { flagged },
+            restoreConformity: true,
+            preInterpolateZ: true,
+            InterpolationType.TriangularFacet);
+
+        var timings = tin.LastAddConstraintsTimings;
+        Assert.NotNull(timings);
+        Assert.True(timings!.InterpolationTinBuild > TimeSpan.Zero);
+        // All four constraint vertices are real-Z, so phase 0 seeds them before the
+        // snapshot; the surface covers the data vertices plus the seeded four.
+        Assert.Equal(dataVertexCount + 4, timings.InterpolationTinVertexCount);
+    }
+
+    [Fact]
     public void AddConstraints_WithoutPreInterpolation_ReportsNoInterpolationTin()
     {
         using var tin = BuildGridTin();

@@ -53,11 +53,13 @@ public static class TinScaleHarness
             RunCase(count, "hilbert", vertices, ring, hilbert: true, withConstraints: true);
 
             // Attribution control: the same constraint work WITHOUT an
-            // interpolation surface (the shoreline ring is depth-bearing, so
-            // conformity splits are linear either way). The delta between this
-            // case and the one above isolates the interpolation-surface share
-            // of the constraint-step transient from the common constraint-
-            // processing costs (edge wrappers, conformity churn).
+            // interpolation surface. The shoreline ring is all-NaN-Z, so here its
+            // vertices stay NaN and conformity splits compute linear-of-NaN instead
+            // of draped Z — but the split set and constraint processing are the same
+            // (identical synthetic-vertex counts, near-identical walls), so the
+            // memory delta between this case and the one above isolates the
+            // interpolation-surface share of the constraint-step transient from the
+            // common constraint-processing costs (edge wrappers, conformity churn).
             RunCase(count, "hilbert", vertices, ring, hilbert: true, withConstraints: true, preInterpolateZ: false);
         }
     }

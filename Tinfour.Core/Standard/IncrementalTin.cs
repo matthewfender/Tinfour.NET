@@ -339,14 +339,32 @@ public class IncrementalTin : IIncrementalTin
         // This ensures that constraint vertices with real Z values are available as
         // interpolation sources when computing Z for NaN constraint vertices.
         // Duplicate vertices are handled gracefully - they'll be detected and remapped later.
+        //
+        // The same sweep detects whether any vertex can ever request draping: a NaN Z
+        // to fill, or a vertex already flagged interpolated-Z (whose conformity splits
+        // drape via ConstraintSplitInterpolation.ShouldDrape). When neither exists the
+        // interpolation surface is provably unreachable — no vertex ever gets flagged,
+        // and a split midpoint only inherits the flag from a flagged endpoint — so the
+        // surface build is skipped entirely (#800 lazy-build guard). Common for
+        // all-depth-bearing constraint sets, e.g. shorelines fully inside the
+        // generation region (no NaN clip-edge/intersection vertices).
+        var anyDrapeCandidate = false;
         if (preInterpolateZ)
         {
             foreach (var c in constraints)
             {
                 foreach (var v in c.GetVertices())
                 {
-                    if (!double.IsNaN(v.GetZ()))
-                        Add(v);
+                    if (double.IsNaN(v.GetZ()))
+                    {
+                        anyDrapeCandidate = true;
+                        continue;
+                    }
+
+                    if (!anyDrapeCandidate && v is Vertex plain && plain.HasInterpolatedZ())
+                        anyDrapeCandidate = true;
+
+                    Add(v);
                 }
             }
 
@@ -371,7 +389,7 @@ public class IncrementalTin : IIncrementalTin
         // rebuilt from GetVertices(), with a navigator used to extrapolate a Z for
         // constraint vertices that fall OUTSIDE the data convex hull.
         IIncrementalTinNavigator? interpolationNavigator = null;
-        if (preInterpolateZ)
+        if (preInterpolateZ && anyDrapeCandidate)
         {
             phaseTimer.Restart();
 
