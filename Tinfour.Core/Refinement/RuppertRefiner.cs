@@ -927,12 +927,22 @@ public class RuppertRefiner : IDelaunayRefiner
 
     private IQuadEdge? FindEncroachedSegment()
     {
+        // Segments shorter than a few vertex-merge tolerances cannot be meaningfully
+        // split: SplitEdge would create a midpoint coincident (within tolerance) with
+        // the segment's own endpoints, and the resulting halves remain "encroached" by
+        // the same nearby vertices — an infinite split cascade that never converges.
+        // Such segments are already at the mesh's minimum representable feature size.
+        var minSplitLength2 = 16.0 * _tin.GetThresholds().GetVertexTolerance2();
+
         while (_encroachedSegmentQueue.Count > 0)
         {
             var seg = _encroachedSegmentQueue.Dequeue();
             _inEncroachmentQueue.Remove(seg);
 
             if (!_constrainedSegments.Contains(seg.GetBaseReference()))
+                continue;
+
+            if (seg.GetLengthSquared() < minSplitLength2)
                 continue;
 
             var enc = ClosestEncroacherOrNull(seg);
@@ -1245,8 +1255,7 @@ public class RuppertRefiner : IDelaunayRefiner
         if (nearEdge != null)
             return SplitSegmentSmart(nearEdge);
 
-        AddVertex(off, VType.Offcenter, null, 0);
-        return off;
+        return AddVertex(off, VType.Offcenter, null, 0) ? off : null;
     }
 
     private IVertex? InsertCircumcenterOrSplit(IQuadEdge repEdge, IVertex a, IVertex b, IVertex c)
@@ -1300,8 +1309,7 @@ public class RuppertRefiner : IDelaunayRefiner
         var centerZ = new Vertex(center.X, center.Y, cz, _vertexIndexer++);
         centerZ = centerZ.WithSynthetic(true);
 
-        AddVertex(centerZ, VType.Circumcenter, null, 0);
-        return centerZ;
+        return AddVertex(centerZ, VType.Circumcenter, null, 0) ? centerZ : null;
     }
 
     private IVertex? SplitSegmentSmart(IQuadEdge seg)
@@ -1352,10 +1360,20 @@ public class RuppertRefiner : IDelaunayRefiner
         return v;
     }
 
-    private void AddVertex(IVertex v, VType type, IVertex? corner, int shell)
+    private bool AddVertex(IVertex v, VType type, IVertex? corner, int shell)
     {
         // Use AddAndReturnEdge to get an edge connected to v, avoiding redundant point location
         var insertedEdge = _tin.AddAndReturnEdge(v);
+
+        // The TIN merges a vertex that falls within tolerance of an existing vertex and
+        // returns an edge anchored on the EXISTING vertex instead of v. Treat that as a
+        // failed insertion: v is not actually in the TIN, so running the refinement
+        // bookkeeping below would re-queue the surrounding bad triangle whose next
+        // candidate is the same (merged) point — an infinite refinement loop that
+        // inserts nothing.
+        if (insertedEdge != null && !ReferenceEquals(insertedEdge.GetA(), v))
+            return false;
+
         _lastInsertedVertex = v;
         _vdata[v] = new VData(type, corner, shell);
 
@@ -1419,6 +1437,8 @@ public class RuppertRefiner : IDelaunayRefiner
             if (_badTrianglesInitialized)
                 UpdateBadTrianglesAroundVertex(v, t0);
         }
+
+        return true;
     }
 
     private void UpdateBadTrianglesAroundVertex(IVertex v, SimpleTriangle? s)

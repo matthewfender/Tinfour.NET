@@ -83,6 +83,13 @@ internal sealed class FrozenSurfaceSampler : IInterpolatorOverTin
 
     private const int MaxPerimeterSearchIterations = 100000;
 
+    // Mirror StochasticLawsonsWalk's verified-exterior constants (bit-compatibility).
+    private const int MaxGhostReentries = 32;
+
+    private const int ExteriorScanRange = 16;
+
+    private const double SubtensionTolerance = 0.5;
+
     /// <summary>
     ///     Forward link per directed handle, copied from the source
     ///     <see cref="EdgeStore" />. Dead pairs keep their NullHandle links;
@@ -368,6 +375,151 @@ internal sealed class FrozenSurfaceSampler : IInterpolatorOverTin
     private int Forward(int h) => _f[h];
 
     /// <summary>
+    ///     Mirrors <see cref="StochasticLawsonsWalk" />'s verified-exterior search over the
+    ///     frozen arrays: the reported perimeter edge (or a ghost-ring neighbour within scan
+    ///     range) qualifies only when it is a hull edge whose sector subtends the target with
+    ///     the target on its ghost side.
+    /// </summary>
+    private int FindVerifiedExteriorEdge(int perimeterEdge, double x, double y)
+    {
+        if (IsVerifiedExteriorEdge(perimeterEdge, x, y)) return perimeterEdge;
+        if (IsVerifiedCornerWedge(perimeterEdge, x, y)) return perimeterEdge;
+
+        var forward = perimeterEdge;
+        var backward = perimeterEdge;
+        for (var i = 0; i < ExteriorScanRange; i++)
+        {
+            forward = Forward(Forward(forward) ^ 1);
+            if (IsVerifiedExteriorEdge(forward, x, y)) return forward;
+            if (IsVerifiedCornerWedge(forward, x, y)) return forward;
+
+            backward = Reverse(Reverse(backward) ^ 1);
+            if (IsVerifiedExteriorEdge(backward, x, y)) return backward;
+            if (IsVerifiedCornerWedge(backward, x, y)) return backward;
+        }
+
+        return -1;
+    }
+
+    private bool IsVerifiedExteriorEdge(int candidate, double x, double y)
+    {
+        if (!IsNullA(Forward(candidate) ^ 1)) return false;
+
+        var ax = Ax(candidate);
+        var ay = Ay(candidate);
+        var bx = Ax(candidate ^ 1);
+        var by = Ay(candidate ^ 1);
+
+        var tX = bx - ax;
+        var tY = by - ay;
+        var len2 = (tX * tX) + (tY * tY);
+        if (len2 <= 0) return false;
+        var dot = ((x - ax) * tX) + ((y - ay) * tY);
+        if (dot < -SubtensionTolerance * len2 || dot > (1 + SubtensionTolerance) * len2) return false;
+
+        return IsOnGhostSide(candidate, x, y);
+    }
+
+    private bool IsVerifiedCornerWedge(int candidate, double x, double y)
+    {
+        if (!IsNullA(Forward(candidate) ^ 1)) return false;
+        if (!IsOnGhostSide(candidate, x, y)) return false;
+
+        var ax = Ax(candidate);
+        var ay = Ay(candidate);
+        var bx = Ax(candidate ^ 1);
+        var by = Ay(candidate ^ 1);
+        var tX = bx - ax;
+        var tY = by - ay;
+        var len2 = (tX * tX) + (tY * tY);
+        if (len2 <= 0) return false;
+        var dot = ((x - ax) * tX) + ((y - ay) * tY);
+
+        if (dot > len2)
+        {
+            var next = Forward(Forward(candidate) ^ 1);
+            return IsBeforeSpanStart(next, x, y) && IsOnGhostSide(next, x, y);
+        }
+
+        if (dot < 0)
+        {
+            var previous = Reverse(Reverse(candidate) ^ 1);
+            return IsBeyondSpanEnd(previous, x, y) && IsOnGhostSide(previous, x, y);
+        }
+
+        return false;
+    }
+
+    private bool IsOnGhostSide(int candidate, double x, double y)
+    {
+        if (!IsNullA(Forward(candidate) ^ 1)) return false;
+
+        var apex = Forward(candidate ^ 1) ^ 1;
+        var qx = Ax(apex);
+        var qy = Ay(apex);
+        if (double.IsNaN(qx)) return false;
+
+        var ax = Ax(candidate);
+        var ay = Ay(candidate);
+        var bx = Ax(candidate ^ 1);
+        var by = Ay(candidate ^ 1);
+
+        var hTarget = HalfPlaneRobust(ax, ay, bx, by, x, y);
+        if (hTarget == 0) return true;
+
+        var hApex = HalfPlaneRobust(ax, ay, bx, by, qx, qy);
+        return hTarget > 0 != hApex > 0;
+    }
+
+    private bool IsBeforeSpanStart(int edge, double x, double y)
+    {
+        var ax = Ax(edge);
+        var ay = Ay(edge);
+        var tX = Ax(edge ^ 1) - ax;
+        var tY = Ay(edge ^ 1) - ay;
+        return ((x - ax) * tX) + ((y - ay) * tY) < 0;
+    }
+
+    private bool IsBeyondSpanEnd(int edge, double x, double y)
+    {
+        var ax = Ax(edge);
+        var ay = Ay(edge);
+        var tX = Ax(edge ^ 1) - ax;
+        var tY = Ay(edge ^ 1) - ay;
+        var len2 = (tX * tX) + (tY * tY);
+        return ((x - ax) * tX) + ((y - ay) * tY) > len2;
+    }
+
+    private double HalfPlaneRobust(double aX, double aY, double bX, double bY, double x, double y)
+    {
+        var h = ((x - aX) * (aY - bY)) + ((y - aY) * (bX - aX));
+        if (h > _halfPlaneThresholdNeg && h < _halfPlaneThreshold)
+            h = _geoOp.HalfPlane(aX, aY, bX, bY, x, y);
+        return h;
+    }
+
+    private int SolidReentryEdge(int edge)
+    {
+        var dual = edge ^ 1;
+        if (!IsNullA(dual) && !IsNullA(dual ^ 1) && !IsNullA(Forward(dual) ^ 1)) return dual;
+
+        return FirstSolidEdge(edge);
+    }
+
+    private int FirstSolidEdge(int fallback)
+    {
+        for (var h = 0; h < _f.Length; h += 2)
+        {
+            if (_f[h] == EdgeStore.NullHandle) continue;
+            if (IsNullA(h) || IsNullA(h ^ 1)) continue;
+            if (!IsNullA(Forward(h) ^ 1)) return h;
+            if (!IsNullA(Forward(h ^ 1) ^ 1)) return h ^ 1;
+        }
+
+        return fallback;
+    }
+
+    /// <summary>
     ///     Reverse link, derived from the 3-cycle face invariant of a
     ///     consistent completed TIN: reverse(h) == forward(forward(h)).
     /// </summary>
@@ -419,6 +571,7 @@ internal sealed class FrozenSurfaceSampler : IInterpolatorOverTin
             if (h0 < 0) edge ^= 1;
         }
 
+        var ghostReentries = 0;
         var iterations = 0;
 
         while (iterations++ < MaxTriangleWalkIterations)
@@ -426,9 +579,27 @@ internal sealed class FrozenSurfaceSampler : IInterpolatorOverTin
             // Check if we've reached a ghost triangle (exterior)
             if (IsNullA(Forward(edge) ^ 1))
             {
-                edge = FindAssociatedPerimeterEdge(edge, x, y);
-                searchHandle = edge;
-                return edge;
+                // Mirrors StochasticLawsonsWalk's verified-exterior handling so the
+                // frozen walk stays bit-compatible with the live walk: an exterior
+                // classification must name a hull edge whose sector genuinely contains
+                // the target; otherwise re-enter the solid mesh and keep walking.
+                var perimeterEdge = FindAssociatedPerimeterEdge(edge, x, y);
+                if (ghostReentries >= MaxGhostReentries)
+                {
+                    searchHandle = perimeterEdge;
+                    return perimeterEdge;
+                }
+
+                var verified = FindVerifiedExteriorEdge(perimeterEdge, x, y);
+                if (verified >= 0)
+                {
+                    searchHandle = verified;
+                    return verified;
+                }
+
+                ghostReentries++;
+                edge = SolidReentryEdge(perimeterEdge);
+                continue;
             }
 
             // Test the other two sides of the triangle with randomized order
