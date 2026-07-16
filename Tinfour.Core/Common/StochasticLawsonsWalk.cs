@@ -229,6 +229,11 @@ public class StochasticLawsonsWalk
             if (s.IsNullA(s.Forward(edge) ^ 1))
             {
                 var perimeterEdge = FindAssociatedPerimeterEdge(s, edge, x, y);
+
+                // Residual limitation: exhausting the re-entry budget falls back to the
+                // unverified pre-fix behaviour (return whatever the perimeter search
+                // reported). Each re-entry re-walks with fresh randomization, so reaching
+                // the cap for an interior target requires 32 consecutive trapped walks.
                 if (ghostReentries >= MaxGhostReentries)
                     return perimeterEdge;
 

@@ -544,6 +544,10 @@ internal sealed class FrozenSurfaceSampler : IInterpolatorOverTin
     {
         var edge = searchHandle;
 
+        // Intentional asymmetry vs StochasticLawsonsWalk: no freed-start (IsAllocated)
+        // guard here — the frozen arrays are immutable for the sampler's lifetime, so a
+        // cached search handle can never be freed under it.
+
         // If the starting edge borders the exterior, start from its dual
         if (IsNullA(Forward(edge) ^ 1)) edge ^= 1;
 
