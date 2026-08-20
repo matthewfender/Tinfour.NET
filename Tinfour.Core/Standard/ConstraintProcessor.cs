@@ -262,7 +262,22 @@ public class ConstraintProcessor
             double x1 = v1.X, y1 = v1.Y;
             double ux = x1 - x0, uy = y1 - y0;
             var u = Math.Sqrt(ux * ux + uy * uy);
-            if (u == 0) goto SegmentContinue; // degenerate segment
+            if (u <= vTol)
+            {
+                // Sub-tolerance segment: upstream geometry pipelines (e.g. Clipper's
+                // int64 round-trip) can emit consecutive constraint vertices separated
+                // by rounding noise (observed ~1e-9) that are value-distinct doubles but
+                // one merged vertex in the TIN. No meaningful ray direction exists - the
+                // tunnel walk previously escaped into the ghost region and threw
+                // "Internal failure 345", losing the whole constraint (ReefMaster #518).
+                // Collapse the near-duplicate into v0 and re-run this index against the
+                // next vertex. (The Java reference marks this exact hole with
+                // "TO DO: test for vector too small".)
+                cvList.RemoveAt(iSegment + 1);
+                nSegments--;
+                iSegment--;
+                goto SegmentContinue;
+            }
             ux /= u;
             uy /= u; // unit direction
             double px = -uy, py = ux; // perpendicular
@@ -351,7 +366,9 @@ public class ConstraintProcessor
                 right1 = (QuadEdge)h.GetForward();
                 left1 = (QuadEdge)h.GetReverse();
                 c = right1.GetB();
-                if (c.IsNullVertex()) throw new InvalidOperationException("Internal failure 345, constraint not added");
+                if (c.IsNullVertex())
+                    throw new InvalidOperationException(
+                        $"Internal failure 345, constraint not added (segment {iSegment}/{nSegments}: ({v0.X:F6},{v0.Y:F6})->({v1.X:F6},{v1.Y:F6}), u={u:E3}, vTol={vTol:E3}, successful={successfulSegments})");
 
                 RemoveEdge(h);
 
