@@ -133,6 +133,8 @@ public class ContourBuilderForTin
 
     private readonly CancellationToken _cancellationToken;
 
+    private long _cancellationCheckCounter;
+
     private int _nContoursAbandoned;
 
     private int _nEdgeTransits;
@@ -270,7 +272,10 @@ public class ContourBuilderForTin
     ///     unambiguous continuation (degenerate flat-plateau or hull-vertex cases) or
     ///     exceeded the defensive transit budget. A non-zero count indicates the surface
     ///     contains regions exactly at a contour level; the produced contour set is still
-    ///     valid but may omit fragments in those regions (RM 501).
+    ///     valid but may omit fragments in those regions (RM 501). Note this is a lower
+    ///     bound on the dropped geometry: an abandoned revolution has already marked the
+    ///     edges it swept as visited, so well-formed contours seeded on those edges at the
+    ///     same level are suppressed without incrementing this count.
     /// </summary>
     public int AbandonedContourCount => _nContoursAbandoned;
 
@@ -409,6 +414,8 @@ public class ContourBuilderForTin
 
         for (var pair = 0; pair < store.PairHighWater; pair++)
         {
+            if ((pair & 4095) == 0) _cancellationToken.ThrowIfCancellationRequested();
+
             var h = pair << 1;
             if (!store.IsAllocated(h)) continue;
 
@@ -835,6 +842,17 @@ public class ContourBuilderForTin
             {
                 terminalSweepIndex++;
                 var n = s.GetForwardFromDual();
+
+                if (n.GetIndex() == terminalEdge.GetIndex())
+                {
+                    // Full revolution without reaching the ghost: the terminal vertex is
+                    // not on the perimeter after all. Callers gate this path on
+                    // _perimeterTermination so this should be unreachable, but enforce
+                    // the invariant rather than pinwheel forever (RM 501). The perimeter
+                    // map lookup below will simply miss and no tip is registered.
+                    break;
+                }
+
                 var B = n.GetB();
                 if (B.IsNullVertex()) break;
                 s = n;
@@ -895,7 +913,10 @@ public class ContourBuilderForTin
                 return false;
             }
 
-            if ((transits & 1023) == 0) _cancellationToken.ThrowIfCancellationRequested();
+            // Builder-wide counter: many short walks per level would otherwise never
+            // reach a per-call threshold, making a large single-level build effectively
+            // uncancellable.
+            if ((++_cancellationCheckCounter & 1023) == 0) _cancellationToken.ThrowIfCancellationRequested();
 
             var f = e.GetForward();
             var r = e.GetReverse();
@@ -971,6 +992,12 @@ public class ContourBuilderForTin
                         // vertices valuating to NaN (contour meets the hull on a vertex).
                         // The contour has no unambiguous continuation - abandon it rather
                         // than pinwheel forever (RM 501).
+                        //
+                        // The e0 triangle itself is deliberately never tested: on the
+                        // through-edge entry path its pair is (K=A, G=B) with zA > z > zB,
+                        // which fails both exit conditions, and on a through-vertex
+                        // re-entry a "success" there would re-add the pivot just left -
+                        // the oscillation this guard exists to stop.
                         _nContoursAbandoned++;
                         return false;
                     }
