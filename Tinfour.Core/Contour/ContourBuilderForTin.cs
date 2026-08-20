@@ -24,6 +24,8 @@
  * 08/2025  M.Fender     Ported to C# for Tinfour.Core
  * 11/2025  M. Fender    Added Span<T> optimizations for performance
  * 07/2026  M. Fender    Single bracketing sweep replaces per-level TIN re-scan (827)
+ * 08/2026  M. Fender    Termination guards for degenerate contour walks +
+ *                       cooperative cancellation (RM 501)
  *
  * Notes:
  *
@@ -34,6 +36,7 @@ namespace Tinfour.Core.Contour;
 
 using System.Collections;
 using System.Diagnostics;
+using System.Threading;
 
 using Tinfour.Core.Common;
 using Tinfour.Core.Edge;
@@ -128,6 +131,10 @@ public class ContourBuilderForTin
     /// </summary>
     private readonly double[] _zContour;
 
+    private readonly CancellationToken _cancellationToken;
+
+    private int _nContoursAbandoned;
+
     private int _nEdgeTransits;
 
     private int _nVertexTransits;
@@ -156,13 +163,20 @@ public class ContourBuilderForTin
     ///     When true, contours are only generated within constraint regions.
     ///     When false (default), contours are generated for the entire TIN.
     /// </param>
+    /// <param name="cancellationToken">
+    ///     Optional token to cooperatively cancel contour construction. Construction
+    ///     happens inside this constructor, so cancellation surfaces as an
+    ///     <see cref="OperationCanceledException"/> thrown from the constructor.
+    /// </param>
     public ContourBuilderForTin(
         IIncrementalTin tin,
         IVertexValuator? vertexValuator,
         double[] zContour,
         bool buildRegions = false,
-        bool constrainedRegionsOnly = false)
+        bool constrainedRegionsOnly = false,
+        CancellationToken cancellationToken = default)
     {
+        _cancellationToken = cancellationToken;
         if (tin == null) throw new ArgumentNullException(nameof(tin), "Null reference for input TIN");
 
         if (!tin.IsBootstrapped()) throw new ArgumentException("Input TIN is not properly populated", nameof(tin));
@@ -250,6 +264,15 @@ public class ContourBuilderForTin
 
         foreach (var contour in _openContourList) contour.CleanUp();
     }
+
+    /// <summary>
+    ///     Gets the number of contour walks that were abandoned because they had no
+    ///     unambiguous continuation (degenerate flat-plateau or hull-vertex cases) or
+    ///     exceeded the defensive transit budget. A non-zero count indicates the surface
+    ///     contains regions exactly at a contour level; the produced contour set is still
+    ///     valid but may omit fragments in those regions (RM 501).
+    /// </summary>
+    public int AbandonedContourCount => _nContoursAbandoned;
 
     /// <summary>
     ///     Gets a list of the contours that were constructed by this class.
@@ -343,6 +366,7 @@ public class ContourBuilderForTin
         // order the per-level sweep used - so the output is identical to the old scan.
         for (var i = 0; i < _zContour.Length; i++)
         {
+            _cancellationToken.ThrowIfCancellationRequested();
             _visited!.SetAll(false); // Clear all bits
             BuildOpenContours(i);
             BuildClosedLoopContours(i, candidates[i]);
@@ -856,8 +880,23 @@ public class ContourBuilderForTin
         var e = terminalEdge;
         MarkAsVisited(e);
 
+        // Defensive transit budget (RM 501): a well-formed contour crosses each edge at
+        // most once, so the walk is bounded by the edge allocation. If the walk exceeds
+        // the budget something is topologically wrong; abandon the contour instead of
+        // hanging the pipeline. _visited is sized to the maximum edge allocation index.
+        var transitBudget = 2L * _visited!.Length + 64;
+        var transits = 0L;
+
         while (true)
         {
+            if (++transits > transitBudget)
+            {
+                _nContoursAbandoned++;
+                return false;
+            }
+
+            if ((transits & 1023) == 0) _cancellationToken.ThrowIfCancellationRequested();
+
             var f = e.GetForward();
             var r = e.GetReverse();
             MarkAsVisited(e);
@@ -921,6 +960,21 @@ public class ContourBuilderForTin
                 while (true)
                 {
                     g = g.GetForwardFromDual();
+
+                    if (g.GetIndex() == e0.GetIndex())
+                    {
+                        // Completed a full revolution around the pivot vertex without
+                        // finding an exit transition. This happens when every neighbour
+                        // sits exactly on the contour level (a flat plateau at z - common
+                        // when a small depth range quantised to float32 puts many vertices
+                        // exactly on a level) or when the remaining neighbours are ghost
+                        // vertices valuating to NaN (contour meets the hull on a vertex).
+                        // The contour has no unambiguous continuation - abandon it rather
+                        // than pinwheel forever (RM 501).
+                        _nContoursAbandoned++;
+                        return false;
+                    }
+
                     var h = g.GetForward();
                     var k = h.GetForward();
                     var K = h.GetA();
