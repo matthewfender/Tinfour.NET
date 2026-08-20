@@ -207,11 +207,19 @@ public class ConstraintProcessor
                 e = (QuadEdge)e.GetDualFromReverse()!;
                 pinwheelStep++;
 
-                if (pinwheelStep > 20)
+                // The pinwheel must visit the FULL star of v0 (bounded by the vertex degree;
+                // the do-while terminates at e == e0). A previous 20-step "safety" break
+                // aborted early at high-degree vertices, missing both the existing (v0,v1)
+                // edge and the reEntry repositioning for hull-adjacent vertices - the
+                // subsequent straddle/tunnel walk then stepped into the ghost region and
+                // threw "Internal failure 345/377", which the caller degrades to an
+                // unconstrained TIN (ReefMaster #518: whole shorelines silently dropped).
+                // The Java reference has no such cap; keep only a corruption backstop far
+                // above any legitimate vertex degree.
+                if (pinwheelStep > 1_000_000)
                 {
-                    // Safety break
-                    Debug.WriteLine($"ProcessConstraint: Breaking pinwheel after {pinwheelStep} steps (safety)");
-                    break;
+                    throw new InvalidOperationException(
+                        "Pinwheel around constraint vertex did not close - TIN topology is corrupt");
                 }
             }
             while (!ReferenceEquals(e, e0));
