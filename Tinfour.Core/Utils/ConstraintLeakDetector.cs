@@ -88,7 +88,24 @@ public class ConstraintLeakDetector
     /// <returns>A <see cref="LeakReport"/> describing all leaked and divergent points.</returns>
     public static LeakReport Detect(IIncrementalTin tin, IConstraint constraint, double boundaryTolerance = 1e-6)
     {
-        var constraintVertices = constraint.GetVertices();
+        return Detect(tin, new[] { constraint }, boundaryTolerance);
+    }
+
+    /// <summary>
+    ///     Multi-constraint variant of <see cref="Detect(IIncrementalTin,IConstraint,double)"/>:
+    ///     a point counts as contained when it is inside (or on the boundary of) ANY of the
+    ///     given constraint polygons. Use this when a shoreline has fragmented into multiple
+    ///     constraint polygons (ReefMaster #528) — checking such a TIN against a single
+    ///     polygon falsely reports every other region's Steiner points as leaked.
+    /// </summary>
+    /// <param name="tin">The incremental TIN to examine.</param>
+    /// <param name="constraints">The constraint polygons to check against.</param>
+    /// <param name="boundaryTolerance">See the single-constraint overload.</param>
+    /// <returns>A <see cref="LeakReport"/> describing all leaked and divergent points.</returns>
+    public static LeakReport Detect(
+        IIncrementalTin tin, IReadOnlyCollection<IConstraint> constraints, double boundaryTolerance = 1e-6)
+    {
+        var constraintVertexLists = constraints.Select(c => c.GetVertices()).ToList();
         var navigator = tin.GetNavigator();
 
         var steinerPoints = tin.GetVertices().Where(v => v.IsSynthetic()).ToList();
@@ -100,17 +117,26 @@ public class ConstraintLeakDetector
             var x = vertex.X;
             var y = vertex.Y;
 
-            // Geometric point-in-polygon check
-            var pipResult = Polyside.IsPointInPolygon(constraintVertices, x, y);
-
-            // For points classified as Outside, check if they are within tolerance
-            // of a constraint edge. SplitSegmentSmart places Steiner points exactly on
-            // constraint edges, and PIP ray-crossing can misclassify these as Outside.
-            if (pipResult == Polyside.Result.Outside && boundaryTolerance > 0)
+            // Contained when inside/on-edge of ANY polygon; Outside only if outside all.
+            var pipResult = Polyside.Result.Outside;
+            foreach (var constraintVertices in constraintVertexLists)
             {
-                var dist = MinDistanceToPolygonEdge(x, y, constraintVertices);
-                if (dist <= boundaryTolerance)
-                    pipResult = Polyside.Result.Edge;
+                var pip = Polyside.IsPointInPolygon(constraintVertices, x, y);
+
+                // For points classified as Outside, check if they are within tolerance
+                // of a constraint edge. SplitSegmentSmart places Steiner points exactly on
+                // constraint edges, and PIP ray-crossing can misclassify these as Outside.
+                if (pip == Polyside.Result.Outside && boundaryTolerance > 0 &&
+                    MinDistanceToPolygonEdge(x, y, constraintVertices) <= boundaryTolerance)
+                {
+                    pip = Polyside.Result.Edge;
+                }
+
+                if (pip != Polyside.Result.Outside)
+                {
+                    pipResult = pip;
+                    break;
+                }
             }
 
             var geometryInside = pipResult != Polyside.Result.Outside;

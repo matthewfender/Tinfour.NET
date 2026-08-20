@@ -423,12 +423,28 @@ public class RuppertRefiner : IDelaunayRefiner
         var iterations = 0;
         var maxIter = _maxIterations > 0 ? _maxIterations : _vdata.Count * 200;
 
+        // Bounded full re-scans: even with the stale-pair re-evaluation in
+        // NextBadEdgeFromQueue, entries can be lost when a pair is recycled and its
+        // occupant is momentarily good but degrades again later. A cheap O(n) re-seed
+        // after the queue drains catches any survivors (ReefMaster #528); the cap
+        // prevents spinning on triangles whose insertions are persistently rejected.
+        const int maxRescans = 5;
+        var rescans = 0;
+
         while (iterations++ < maxIter)
         {
             var v = RefineOnce();
 
             if (v == null)
-                return true;
+            {
+                if (rescans++ >= maxRescans)
+                    return true;
+
+                _badTrianglesInitialized = false;
+                v = RefineOnce();
+                if (v == null)
+                    return true;
+            }
         }
 
         return false;
@@ -1128,10 +1144,19 @@ public class RuppertRefiner : IDelaunayRefiner
 
             // If the pair was deallocated (and possibly recycled) since this
             // entry was enqueued, the entry refers to a dead incarnation of
-            // the edge; skip it. The pair's current occupant was (or will be)
-            // enqueued under its own token.
+            // the edge. The current occupant is NOT guaranteed to have been
+            // re-enqueued: flip cascades from a distant insertion can rebuild a
+            // whole constraint region's edges without any local insertion there
+            // (observed with multiple constraint regions, ReefMaster #528 - the
+            // second region's bad triangles were silently dropped and never
+            // refined). Evaluate the current occupant before moving on.
             if (((QuadEdge)rep).GetPairToken() != bt.PairToken)
+            {
+                var pNow = TriangleBadPriorityFromEdge(rep);
+                if (pNow > 0.0)
+                    return rep;
                 continue;
+            }
 
             var p = TriangleBadPriorityFromEdge(rep);
             if (p > 0.0)
@@ -1685,8 +1710,9 @@ public class RuppertRefiner : IDelaunayRefiner
     /// <summary>
     ///     Checks if a point is inside any of the cached non-hole constraint polygons.
     ///     Uses bounding box pre-check for fast rejection before the full PIP test.
+    ///     Not inlined: the loop body with its point-in-polygon calls is far past the
+    ///     size where inlining helps (#528).
     /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool IsInsideAnyConstraintPolygon(double x, double y)
     {
         foreach (var cp in _constraintPolygons)
