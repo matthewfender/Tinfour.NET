@@ -270,12 +270,23 @@ public class ConstraintProcessor
                 // one merged vertex in the TIN. No meaningful ray direction exists - the
                 // tunnel walk previously escaped into the ghost region and threw
                 // "Internal failure 345", losing the whole constraint (ReefMaster #518).
-                // Collapse the near-duplicate into v0 and re-run this index against the
-                // next vertex. (The Java reference marks this exact hole with
-                // "TO DO: test for vector too small".)
-                cvList.RemoveAt(iSegment + 1);
-                nSegments--;
-                iSegment--;
+                if (iSegment < nSegments - 1)
+                {
+                    // Collapse the near-duplicate into v0 and re-run this index against
+                    // the next vertex. (The Java reference marks this exact hole with
+                    // "TO DO: test for vector too small".)
+                    cvList.RemoveAt(iSegment + 1);
+                    nSegments--;
+                    iSegment--;
+                    goto SegmentContinue;
+                }
+
+                // Final segment (for polygons, the ring closure): removing the closing
+                // vertex would drop the closure from the working list, so just skip.
+                // The near-duplicate endpoints merge to one TIN vertex on insertion
+                // (separation << merge tolerance), so the border chain already closes
+                // there; if they somehow remained distinct, the pinwheel above would
+                // have found and constrained the connecting edge before reaching here.
                 goto SegmentContinue;
             }
             ux /= u;

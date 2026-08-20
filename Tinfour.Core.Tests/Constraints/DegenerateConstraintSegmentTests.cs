@@ -74,37 +74,96 @@ public class DegenerateConstraintSegmentTests
     }
 
     [Fact]
-    public void AddConstraints_HighDegreeConstraintVertex_DoesNotThrow()
+    public void AddConstraints_NearDuplicateRingClosure_DoesNotLeakFloodFill()
     {
-        // A star of 40 points around a centre vertex gives the centre a degree far
-        // above the removed 20-step pinwheel cap. The constraint runs through the
-        // centre, so segment processing must pinwheel the full star.
+        // The ring's LAST vertex is a near-duplicate of the first, so the polygon's
+        // closing segment (last -> first-copy) is the degenerate one. The closure must
+        // still hold: the border chain closes at the merged vertex, and the flood fill
+        // must not leak past the border and mark exterior geometry as region-interior.
+        var tin = new IncrementalTin(1.0);
+        var outside = new Vertex(25, 25, -9.0);
+        tin.Add(new List<IVertex>
+        {
+            new Vertex(2, 2, -1.0),
+            new Vertex(8, 2, -2.0),
+            new Vertex(5, 8, -3.0),
+            new Vertex(5, 4, -2.5),
+            outside,
+            new Vertex(30, 20, -9.5),
+        });
+
+        var ring = new List<IVertex>
+        {
+            new Vertex(0, 0, 0),
+            new Vertex(10, 0, 0),
+            new Vertex(10, 10, 0),
+            new Vertex(0, 10, 0),
+            new Vertex(1e-9, 1e-9, 0), // near-duplicate of the ring start
+        };
+
+        var constraint = new PolygonConstraint(ring);
+        tin.AddConstraints(new List<IConstraint> { constraint }, restoreConformity: true);
+
+        Assert.NotNull(tin.GetConstraints());
+        Assert.Single(tin.GetConstraints()!);
+
+        var interiorCount = 0;
+        var outsideInteriorEdges = 0;
+        foreach (var e in tin.GetEdges())
+        {
+            if (e.IsConstraintRegionInterior())
+            {
+                interiorCount++;
+                var a = e.GetA();
+                var b = e.GetB();
+                if (Equals(a, outside) || Equals(b, outside))
+                {
+                    outsideInteriorEdges++;
+                }
+            }
+        }
+
+        Assert.True(interiorCount > 0, "expected interior edges inside the constraint region");
+        Assert.Equal(0, outsideInteriorEdges);
+    }
+
+    [Fact]
+    public void AddConstraints_HighDegreeConstraintVertex_MarksConstraintPath()
+    {
+        // A star of 64 points around a centre vertex gives the centre a degree far above
+        // the removed 20-step pinwheel cap (which examined at most 21 neighbours). The
+        // constraint turns at the centre onto a NON-collinear spoke more than 21 steps
+        // away in either rotation direction, so only a full-star pinwheel can find it.
+        const int spokes = 64;
         var tin = new IncrementalTin(1.0);
         var vertices = new List<IVertex> { new Vertex(0, 0, -1.0) };
-        for (var i = 0; i < 40; i++)
+        for (var i = 0; i < spokes; i++)
         {
-            var angle = 2 * Math.PI * i / 40;
+            var angle = 2 * Math.PI * i / spokes;
             vertices.Add(new Vertex(10 * Math.Cos(angle), 10 * Math.Sin(angle), -2.0));
         }
 
         tin.Add(vertices);
 
-        // Linear constraint passing through the centre vertex.
+        // Path: spoke 0 -> centre -> spoke 27 (~152 degrees, 27 steps one way, 37 the other).
+        var targetAngle = 2 * Math.PI * 27 / spokes;
         var constraint = new LinearConstraint(new List<IVertex>
         {
             new Vertex(10, 0, 0),
             new Vertex(0, 0, 0),
-            new Vertex(10 * Math.Cos(2 * Math.PI * 20 / 40), 10 * Math.Sin(2 * Math.PI * 20 / 40), 0),
+            new Vertex(10 * Math.Cos(targetAngle), 10 * Math.Sin(targetAngle), 0),
         });
 
         tin.AddConstraints(new List<IConstraint> { constraint }, restoreConformity: true);
 
+        // Both legs must be marked; each leg is one TIN edge (centre-to-spoke), so
+        // exactly the two path edges are linear-constraint members.
         var constrainedEdges = 0;
         foreach (var e in tin.GetEdges())
         {
             if (e.IsConstrained()) constrainedEdges++;
         }
 
-        Assert.True(constrainedEdges >= 2, $"expected the constraint path to be marked, found {constrainedEdges} constrained edges");
+        Assert.Equal(2, constrainedEdges);
     }
 }
