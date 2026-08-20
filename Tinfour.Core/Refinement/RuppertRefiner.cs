@@ -426,25 +426,29 @@ public class RuppertRefiner : IDelaunayRefiner
         // Bounded full re-scans: even with the stale-pair re-evaluation in
         // NextBadEdgeFromQueue, entries can be lost when a pair is recycled and its
         // occupant is momentarily good but degrades again later. A cheap O(n) re-seed
-        // after the queue drains catches any survivors (ReefMaster #528); the cap
-        // prevents spinning on triangles whose insertions are persistently rejected.
+        // after the queue drains catches any survivors (ReefMaster #528). The cap
+        // bounds the O(n) re-seed cost; it is refreshed whenever a re-scan leads to
+        // real insertions, so only consecutive fruitless re-scans end the loop.
         const int maxRescans = 5;
         var rescans = 0;
 
         while (iterations++ < maxIter)
         {
-            var v = RefineOnce();
+            if (RefineOnce() != null)
+                continue;
 
-            if (v == null)
-            {
-                if (rescans++ >= maxRescans)
-                    return true;
+            // Queue drained - re-seed and probe for survivors.
+            if (rescans >= maxRescans || iterations++ >= maxIter)
+                return rescans >= maxRescans;
 
-                _badTrianglesInitialized = false;
-                v = RefineOnce();
-                if (v == null)
-                    return true;
-            }
+            rescans++;
+            _badTrianglesInitialized = false;
+            var sizeBefore = _vdata.Count;
+            if (RefineOnce() == null)
+                return true;
+
+            if (_vdata.Count > sizeBefore)
+                rescans = 0;
         }
 
         return false;
@@ -1152,6 +1156,13 @@ public class RuppertRefiner : IDelaunayRefiner
             // refined). Evaluate the current occupant before moving on.
             if (((QuadEdge)rep).GetPairToken() != bt.PairToken)
             {
+                // The pair may be FREE rather than recycled - a freed pair's links are
+                // cleared (-1) and dereferencing them would throw. Only a live occupant
+                // is re-evaluated.
+                var qe = (QuadEdge)rep;
+                if (!qe.GetStore().IsAllocated(qe.GetIndex()))
+                    continue;
+
                 var pNow = TriangleBadPriorityFromEdge(rep);
                 if (pNow > 0.0)
                     return rep;

@@ -99,13 +99,22 @@ public class ConstraintLeakDetector
     ///     polygon falsely reports every other region's Steiner points as leaked.
     /// </summary>
     /// <param name="tin">The incremental TIN to examine.</param>
-    /// <param name="constraints">The constraint polygons to check against.</param>
+    /// <param name="constraints">The constraint polygons to check against. Hole constraints
+    /// are ignored (a point inside a hole is not "contained"); non-region constraints
+    /// contribute no polygon.</param>
     /// <param name="boundaryTolerance">See the single-constraint overload.</param>
+    /// <remarks>
+    /// Diagnostics-only API: cost is O(steinerPoints × polygons × vertices) — not intended
+    /// for production sweeps over thousands of polygons.
+    /// </remarks>
     /// <returns>A <see cref="LeakReport"/> describing all leaked and divergent points.</returns>
     public static LeakReport Detect(
         IIncrementalTin tin, IReadOnlyCollection<IConstraint> constraints, double boundaryTolerance = 1e-6)
     {
-        var constraintVertexLists = constraints.Select(c => c.GetVertices()).ToList();
+        var constraintVertexLists = constraints
+            .Where(c => c is not PolygonConstraint { } pc || !pc.IsHole())
+            .Select(c => c.GetVertices())
+            .ToList();
         var navigator = tin.GetNavigator();
 
         var steinerPoints = tin.GetVertices().Where(v => v.IsSynthetic()).ToList();
@@ -118,6 +127,10 @@ public class ConstraintLeakDetector
             var y = vertex.Y;
 
             // Contained when inside/on-edge of ANY polygon; Outside only if outside all.
+            // Precedence Inside > Edge > Outside: an Edge result from one polygon must not
+            // mask an Inside from a later one — the divergence gate below skips Edge, so
+            // stopping at the first Edge would drop genuine divergences in a
+            // polygon-order-dependent way.
             var pipResult = Polyside.Result.Outside;
             foreach (var constraintVertices in constraintVertexLists)
             {
@@ -132,10 +145,15 @@ public class ConstraintLeakDetector
                     pip = Polyside.Result.Edge;
                 }
 
-                if (pip != Polyside.Result.Outside)
+                if (pip == Polyside.Result.Inside)
                 {
-                    pipResult = pip;
+                    pipResult = Polyside.Result.Inside;
                     break;
+                }
+
+                if (pip == Polyside.Result.Edge)
+                {
+                    pipResult = Polyside.Result.Edge;
                 }
             }
 

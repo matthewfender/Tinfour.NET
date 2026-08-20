@@ -28,7 +28,8 @@ using Xunit;
 ///     <list type="bullet">
 ///         <item>RuppertRefiner cached only the FIRST non-hole polygon constraint for
 ///         geometric containment, rejecting Steiner points in regions 2..N as
-///         "outside" (fixed by the multi-polygon cache).</item>
+///         "outside" — fixed earlier by the multi-polygon cache (commit 057c08d),
+///         pinned here.</item>
 ///         <item>The bad-triangle queue silently dropped entries whose edge pair was
 ///         recycled by flip cascades from insertions in ANOTHER region — the region
 ///         added second retained its skinny triangles unrefined (fixed by re-evaluating
@@ -154,6 +155,56 @@ public class RuppertMultiPolygonContainmentTests
         Assert.True(syntheticInB >= 10, $"region B must be substantially refined (got {syntheticInB} Steiner points)");
         Assert.True(badA <= 8, $"region A must converge (got {badA} remaining bad triangles)");
         Assert.True(badB <= 8, $"region B must converge (got {badB} remaining bad triangles; pre-fix this was 12 with near-zero insertions)");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RefineOnce_Loop_TwoDisjointConstraintRegions_RefinesBoth(bool swapConstraintOrder)
+    {
+        // Production (ReefMaster TriangulationStage) drives RefineOnce directly in a
+        // break-on-first-null loop with NO re-scan, so this pins the stale-pair
+        // re-evaluation in NextBadEdgeFromQueue on its own — Refine()'s re-scan
+        // safety net must not be needed for both regions to refine.
+        var tin = CreateTwoRegionTin(swapConstraintOrder, out _, out _);
+
+        var options = new RuppertOptions(28.0)
+        {
+            MaxIterations = 2000,
+            MinimumTriangleArea = 0.01,
+            RefineOnlyInsideConstraints = true,
+            AddBoundingBoxConstraint = false,
+        };
+
+        var refiner = new RuppertRefiner(tin, options);
+        var iterations = 0;
+        while (iterations++ < 2000 && refiner.RefineOnce() != null)
+        {
+        }
+
+        var syntheticInA = 0;
+        var syntheticInB = 0;
+        foreach (var v in tin.GetVertices())
+        {
+            if (!v.IsSynthetic())
+            {
+                continue;
+            }
+
+            if (v.X < 80)
+            {
+                syntheticInA++;
+            }
+            else
+            {
+                syntheticInB++;
+            }
+        }
+
+        Assert.True(syntheticInA >= 10,
+            $"RefineOnce loop must refine region A without Refine()'s re-scans (got {syntheticInA})");
+        Assert.True(syntheticInB >= 10,
+            $"RefineOnce loop must refine region B without Refine()'s re-scans (got {syntheticInB})");
     }
 
     [Fact]
