@@ -818,11 +818,6 @@ public class RuppertRefiner : IDelaunayRefiner
         var bx = b.X; var by = b.Y;
         var cx = c.X; var cy = c.Y;
 
-        // Excluded-zone triangles are deliberately left coarse (#1274)
-        if (_exclusionZones.Count > 0 &&
-            IsInsideAnyExclusionZone((ax + bx + cx) / 3.0, (ay + by + cy) / 3.0))
-            return 0.0;
-
         // AB, AC vectors
         var abx = bx - ax; var aby = by - ay;
         var acx = cx - ax; var acy = cy - ay;
@@ -875,6 +870,12 @@ public class RuppertRefiner : IDelaunayRefiner
         if (cross2 <= minCross2)
             return 0.0;
 
+        // Excluded-zone triangles are deliberately left coarse (#1274). Tested LAST so
+        // only triangles that are otherwise bad pay for the point-in-polygon scan.
+        if (_exclusionZones.Count > 0 &&
+            IsInsideAnyExclusionZone((ax + bx + cx) / 3.0, (ay + by + cy) / 3.0))
+            return 0.0;
+
         return cross2;
     }
 
@@ -908,11 +909,6 @@ public class RuppertRefiner : IDelaunayRefiner
         var ax = vA.X; var ay = vA.Y;
         var bx = vB.X; var by = vB.Y;
         var cx = vC.X; var cy = vC.Y;
-
-        // Excluded-zone triangles are deliberately left coarse (#1274)
-        if (_exclusionZones.Count > 0 &&
-            IsInsideAnyExclusionZone((ax + bx + cx) / 3.0, (ay + by + cy) / 3.0))
-            return 0.0;
 
         // AB, AC vectors
         var abx = bx - ax; var aby = by - ay;
@@ -964,6 +960,12 @@ public class RuppertRefiner : IDelaunayRefiner
 
         // Area must exceed threshold
         if (cross2 <= minCross2)
+            return 0.0;
+
+        // Excluded-zone triangles are deliberately left coarse (#1274). Tested LAST so
+        // only triangles that are otherwise bad pay for the point-in-polygon scan.
+        if (_exclusionZones.Count > 0 &&
+            IsInsideAnyExclusionZone((ax + bx + cx) / 3.0, (ay + by + cy) / 3.0))
             return 0.0;
 
         return cross2;
@@ -1799,9 +1801,15 @@ public class RuppertRefiner : IDelaunayRefiner
     /// </summary>
     private void ConstrainExclusionFrontierEdges(IIncrementalTin tin)
     {
-        var syntheticIndex = Math.Min(
-            tin.GetConstraints()?.Count ?? 0,
-            QuadEdgeConstants.ConstraintUpperIndexValueMax);
+        var syntheticIndex = tin.GetConstraints()?.Count ?? 0;
+        if (syntheticIndex > QuadEdgeConstants.ConstraintUpperIndexValueMax)
+        {
+            // No synthetic line index can be minted without colliding with a real
+            // constraint's index (which would misattribute frontier edges to that
+            // constraint downstream). Skip the frontier flagging; the selection,
+            // Steiner-acceptance and segment-split gates remain fully active.
+            return;
+        }
 
         foreach (var edge in tin.GetEdgeIterator())
         {

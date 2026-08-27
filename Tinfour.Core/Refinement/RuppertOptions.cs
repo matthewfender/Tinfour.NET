@@ -189,6 +189,15 @@ public class RuppertOptions
     ///         is excluded when it lies inside an odd number of rings, so a hole is expressed
     ///         by supplying its ring alongside the enclosing shell.
     ///     </para>
+    ///     <para>
+    ///         Note: constructing a <see cref="RuppertRefiner"/> with exclusion zones
+    ///         mutates the TIN in place — edges on the exclusion frontier (side triangles
+    ///         straddling the zone boundary) are flagged as synthetic line constraints so
+    ///         Delaunay cavities cannot restructure the excluded area. The flags persist on
+    ///         the TIN even if refinement is subsequently abandoned; they carry an index one
+    ///         past the TIN's real constraints, so per-constraint lookups resolve to
+    ///         "no known constraint".
+    ///     </para>
     /// </remarks>
     /// <value>The exclusion zone rings, or <c>null</c> (default) for no exclusions.</value>
     public IReadOnlyList<IReadOnlyList<(double X, double Y)>>? ExclusionZones { get; set; }
