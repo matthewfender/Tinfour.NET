@@ -47,7 +47,12 @@ public class RuppertExclusionZoneTests
         var inserted = RunToCompletion(tin, options);
 
         Assert.NotEmpty(inserted); // refinement must still run on the non-excluded side
+
+        // Midpoint subdivisions ON constrained frontier edges are legitimate (they preserve
+        // the frontier polyline and carry the constraint-member bit); free Steiner points
+        // (offcenters/circumcenters) must never land inside the zone.
         Assert.All(inserted, v => Assert.False(
+            !(v is Vertex cv && cv.IsConstraintMember()) &&
             v.X > 50.0 && v.X < 110.0 && v.Y > -10.0 && v.Y < 110.0,
             $"vertex ({v.X:F2},{v.Y:F2}) was inserted inside the exclusion zone"));
     }
@@ -74,9 +79,10 @@ public class RuppertExclusionZoneTests
 
         var inserted = RunToCompletion(tin, options);
 
-        // Nothing in the zone-minus-hole area…
+        // No free Steiner point in the zone-minus-hole area (constrained frontier-edge
+        // midpoints are legitimate — see the zone test above)…
         Assert.All(inserted, v => Assert.False(
-            InZoneRing(v) && !InHoleRing(v),
+            !(v is Vertex cv && cv.IsConstraintMember()) && InZoneRing(v) && !InHoleRing(v),
             $"vertex ({v.X:F2},{v.Y:F2}) was inserted inside the exclusion zone (outside the hole)"));
 
         // …but the hole is refinable again.

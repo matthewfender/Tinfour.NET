@@ -369,6 +369,14 @@ public class RuppertRefiner : IDelaunayRefiner
                     ringVertices.Add(new Vertex(x, y, 0));
                 _exclusionZones.Add(new ConstraintPolygonData(ringVertices));
             }
+
+            // Constrain the frontier so refinement cannot restructure it: an edge whose two
+            // side triangles straddle the exclusion boundary is flagged as a (synthetic)
+            // line constraint. Constrained edges are never flipped by Delaunay insertion
+            // (only subdivided in place, which preserves the frontier polyline), so cavity
+            // re-triangulation of kept-side insertions cannot reach across into the
+            // excluded area and hybrid straddler triangles cannot form.
+            ConstrainExclusionFrontierEdges(tin);
         }
 
         // Initialize collections with reference equality comparison for edges
@@ -1780,6 +1788,46 @@ public class RuppertRefiner : IDelaunayRefiner
                 return true;
         }
         return false;
+    }
+
+    /// <summary>
+    ///     Flags every exclusion-frontier edge (side triangles straddling the zone
+    ///     boundary) as a synthetic line constraint. The synthetic constraint index is one
+    ///     past the TIN's real constraints so downstream per-constraint lookups treat these
+    ///     edges as "no known constraint" (the line-index setter writes only the upper
+    ///     index bits and the line/edge flags, so region membership flags are preserved).
+    /// </summary>
+    private void ConstrainExclusionFrontierEdges(IIncrementalTin tin)
+    {
+        var syntheticIndex = Math.Min(
+            tin.GetConstraints()?.Count ?? 0,
+            QuadEdgeConstants.ConstraintUpperIndexValueMax);
+
+        foreach (var edge in tin.GetEdgeIterator())
+        {
+            if (edge.IsConstrained())
+                continue;
+
+            var dual = edge.GetDual();
+            if (SideCentroidExcluded(edge) != SideCentroidExcluded(dual))
+                ((QuadEdge)edge.GetBaseReference()).SetConstraintLineIndex(syntheticIndex);
+        }
+    }
+
+    /// <summary>
+    ///     Whether the triangle on this directed edge's side has its centroid inside an
+    ///     exclusion zone. Ghost sides (perimeter) count as not excluded.
+    /// </summary>
+    private bool SideCentroidExcluded(IQuadEdge e)
+    {
+        var a = e.GetA();
+        var b = e.GetB();
+        var c = e.GetForward().GetB();
+        if (a == null || b == null || c == null ||
+            a.IsNullVertex() || b.IsNullVertex() || c.IsNullVertex())
+            return false;
+
+        return IsInsideAnyExclusionZone((a.X + b.X + c.X) / 3.0, (a.Y + b.Y + c.Y) / 3.0);
     }
 
     /// <summary>
