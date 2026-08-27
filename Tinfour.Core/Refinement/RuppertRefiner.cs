@@ -157,6 +157,9 @@ public class RuppertRefiner : IDelaunayRefiner
 
     private readonly List<ConstraintPolygonData> _constraintPolygons = new();
 
+    // Exclusion zone rings (even-odd containment). See RuppertOptions.ExclusionZones.
+    private readonly List<ConstraintPolygonData> _exclusionZones = new();
+
     #endregion
 
     #region Inner Types
@@ -348,6 +351,23 @@ public class RuppertRefiner : IDelaunayRefiner
                 {
                     _constraintPolygons.Add(new ConstraintPolygonData(poly.GetVertices()));
                 }
+            }
+        }
+
+        // Cache exclusion zone rings for the refinement gates (selection, Steiner
+        // acceptance, segment splitting). Rings are stored with their bounding boxes;
+        // containment over the set is even-odd so callers can express holes.
+        if (options.ExclusionZones is { Count: > 0 })
+        {
+            foreach (var ring in options.ExclusionZones)
+            {
+                if (ring is not { Count: >= 3 })
+                    continue;
+
+                var ringVertices = new List<IVertex>(ring.Count);
+                foreach (var (x, y) in ring)
+                    ringVertices.Add(new Vertex(x, y, 0));
+                _exclusionZones.Add(new ConstraintPolygonData(ringVertices));
             }
         }
 
@@ -790,6 +810,11 @@ public class RuppertRefiner : IDelaunayRefiner
         var bx = b.X; var by = b.Y;
         var cx = c.X; var cy = c.Y;
 
+        // Excluded-zone triangles are deliberately left coarse (#1274)
+        if (_exclusionZones.Count > 0 &&
+            IsInsideAnyExclusionZone((ax + bx + cx) / 3.0, (ay + by + cy) / 3.0))
+            return 0.0;
+
         // AB, AC vectors
         var abx = bx - ax; var aby = by - ay;
         var acx = cx - ax; var acy = cy - ay;
@@ -875,6 +900,11 @@ public class RuppertRefiner : IDelaunayRefiner
         var ax = vA.X; var ay = vA.Y;
         var bx = vB.X; var by = vB.Y;
         var cx = vC.X; var cy = vC.Y;
+
+        // Excluded-zone triangles are deliberately left coarse (#1274)
+        if (_exclusionZones.Count > 0 &&
+            IsInsideAnyExclusionZone((ax + bx + cx) / 3.0, (ay + by + cy) / 3.0))
+            return 0.0;
 
         // AB, AC vectors
         var abx = bx - ax; var aby = by - ay;
@@ -963,6 +993,10 @@ public class RuppertRefiner : IDelaunayRefiner
                 continue;
 
             if (seg.GetLengthSquared() < minSplitLength2)
+                continue;
+
+            // Segments inside exclusion zones are never split (#1274)
+            if (IsSegmentMidpointExcluded(seg))
                 continue;
 
             var enc = ClosestEncroacherOrNull(seg);
@@ -1064,7 +1098,10 @@ public class RuppertRefiner : IDelaunayRefiner
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool CheckEdge(IQuadEdge e, IVertex p)
     {
-        return e.IsConstrained() && IsEncroachedByPoint(e, p);
+        // Excluded-midpoint segments are never split, so a Steiner point may not treat
+        // them as encroached (#1274) — otherwise the point-encroachment path would
+        // reroute into SplitSegmentSmart and subdivide the excluded area anyway.
+        return e.IsConstrained() && !IsSegmentMidpointExcluded(e) && IsEncroachedByPoint(e, p);
     }
 
     private static bool IsEncroachedByPoint(IQuadEdge seg, IVertex p)
@@ -1272,6 +1309,10 @@ public class RuppertRefiner : IDelaunayRefiner
                 return null;
         }
 
+        // Never place Steiner points inside an exclusion zone (#1274)
+        if (_exclusionZones.Count > 0 && IsInsideAnyExclusionZone(ox, oy))
+            return null;
+
         var enc = FirstEncroachedByPoint(off);
         if (enc != null)
             return SplitSegmentSmart(enc);
@@ -1307,6 +1348,10 @@ public class RuppertRefiner : IDelaunayRefiner
             if (!IsInsideAnyConstraintPolygon(center.X, center.Y))
                 return null;
         }
+
+        // Never place Steiner points inside an exclusion zone (#1274)
+        if (_exclusionZones.Count > 0 && IsInsideAnyExclusionZone(center.X, center.Y))
+            return null;
 
         var enc = FirstEncroachedByPoint(center);
         if (enc != null)
@@ -1735,6 +1780,39 @@ public class RuppertRefiner : IDelaunayRefiner
                 return true;
         }
         return false;
+    }
+
+    /// <summary>
+    ///     Even-odd containment over the exclusion zone rings: a point is excluded when it
+    ///     lies inside an odd number of rings (holes are expressed as inner rings).
+    ///     Bounding box pre-checks reject the common far-away case cheaply.
+    /// </summary>
+    private bool IsInsideAnyExclusionZone(double x, double y)
+    {
+        var insideCount = 0;
+        foreach (var zone in _exclusionZones)
+        {
+            if (x < zone.MinX || x > zone.MaxX || y < zone.MinY || y > zone.MaxY)
+                continue;
+            if (Utils.Polyside.IsPointInPolygon(zone.Vertices, x, y) != Utils.Polyside.Result.Outside)
+                insideCount++;
+        }
+        return (insideCount & 1) == 1;
+    }
+
+    /// <summary>
+    ///     True when a constrained segment's midpoint lies inside an exclusion zone — such
+    ///     segments are never split (splitting would subdivide the excluded area's
+    ///     triangulation, which the zones exist to prevent).
+    /// </summary>
+    private bool IsSegmentMidpointExcluded(IQuadEdge seg)
+    {
+        if (_exclusionZones.Count == 0)
+            return false;
+
+        var a = seg.GetA();
+        var b = seg.GetB();
+        return IsInsideAnyExclusionZone((a.X + b.X) * 0.5, (a.Y + b.Y) * 0.5);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

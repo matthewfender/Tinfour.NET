@@ -167,6 +167,33 @@ public class RuppertOptions
     public bool RefineOnlyInsideConstraints { get; set; } = true;
 
     /// <summary>
+    ///     Gets or sets optional exclusion zones, in TIN coordinates.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         Bad triangles whose centroid lies inside any zone are not selected for
+    ///         refinement, Steiner points (off-centers, circumcenters) are never inserted
+    ///         inside a zone, and constrained segments whose midpoint lies inside a zone are
+    ///         never split. The triangulation inside the zones is left as coarse as the
+    ///         input.
+    ///     </para>
+    ///     <para>
+    ///         Intended for masked areas (e.g. NoData / low-confidence regions) whose
+    ///         triangles a downstream consumer will discard: leaving them unrefined keeps
+    ///         the discard frontier aligned with triangle edges, so per-triangle masking
+    ///         stays exact after refinement instead of straddling the mask boundary.
+    ///     </para>
+    ///     <para>
+    ///         Each zone is a closed ring of (X, Y) vertices (the closing edge from last to
+    ///         first vertex is implicit). Containment over the ring set is even-odd: a point
+    ///         is excluded when it lies inside an odd number of rings, so a hole is expressed
+    ///         by supplying its ring alongside the enclosing shell.
+    ///     </para>
+    /// </remarks>
+    /// <value>The exclusion zone rings, or <c>null</c> (default) for no exclusions.</value>
+    public IReadOnlyList<IReadOnlyList<(double X, double Y)>>? ExclusionZones { get; set; }
+
+    /// <summary>
     ///     Gets or sets whether to automatically add a bounding box constraint before refinement.
     /// </summary>
     /// <remarks>
